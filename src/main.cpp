@@ -1276,9 +1276,9 @@ bool checkButtonHeld(int pin, unsigned long& lastActionTime, unsigned long actio
     return false;
 }
 #endif
-#define OLEDTEST3
+#define OLEDLCD
 
-#define __Serial_DEBUG__
+#define __Serial_DEBUG___
 #ifndef CONFIG_H
 #define CONFIG_H
 
@@ -1329,6 +1329,14 @@ bool checkButtonHeld(int pin, unsigned long& lastActionTime, unsigned long actio
 #define ALARM_DURATION 5000      // ms, duration for custom alarm
 #define HOURLY_CHIME_DURATION 500 // ms, duration for hourly chime
 #define TEMP_ALARM_DURATION 500   // ms, duration for temperature alarm beep
+
+// ----------------------------------------------------------------------------
+// 全局 U8g2 对象 和 软件 I2C 引脚定义
+// ----------------------------------------------------------------------------
+// !!! 请根据你的实际接线修改 SCL 和 SDA 引脚 !!!
+#define SW_I2C_PIN_SCL 6 // OLED SCL -> Arduino D6 (示例修改)
+#define SW_I2C_PIN_SDA 7 // OLED SDA -> Arduino D7 (示例修改)
+#define OLED_PIN_RST U8X8_PIN_NONE // 如果不使用 RST 引脚
 
 #endif // CONFIG_H
 #if defined(NOW1)
@@ -3077,7 +3085,7 @@ void drawClockHands(int h, int m, int s) {
 // ============================================================================
 // 封装的函数 1: U8G2 初始化
 // ============================================================================
-void U8G2INIT() {
+void U8G2_Init() {
   u8g2.begin(); // 初始化 U8g2 库
   // u8g2.setContrast(100); // 可选: 设置对比度 (0-255)
   // u8g2.setFontMode(1);  // 0=solid background, 1=transparent background for text
@@ -3087,7 +3095,7 @@ void U8G2INIT() {
 // ============================================================================
 // 封装的函数 2: 显示时钟
 // ============================================================================
-void displayClock(int hours, int minutes, int seconds) {
+void displayOLEDClock(int hours, int minutes, int seconds) {
   u8g2.firstPage();
   do {
     // 清屏 (对于全缓冲模式，firstPage通常会隐式清空，但显式调用更安全)
@@ -3107,7 +3115,7 @@ void setup(void) {
   // Serial.begin(9600); // 可选，用于调试
   // Serial.println("Clock with U8g2 Starting...");
 
-  U8G2INIT(); // 调用初始化函数
+  U8G2_Init(); // 调用初始化函数
 
   // 初始时间设置在全局变量中
 }
@@ -3136,11 +3144,1717 @@ void loop(void) {
   }
 
   // 调用显示时钟函数
-  displayClock(currentHours, currentMinutes, currentSeconds);
+  displayOLEDClock(currentHours, currentMinutes, currentSeconds);
 
   // loop本身不需要delay，因为时间的更新和重绘是基于millis的
   // 如果CPU占用过高或闪烁，可以考虑在此处加一个非常小的delay，
   // 但通常对于U8g2的全缓冲模式是不必要的。
   // delay(10);
+}
+#endif
+
+
+#if defined(OLEDTEST4)
+#include <Arduino.h>
+#include <U8g2lib.h> // 引入 U8g2 库
+
+// ----------------------------------------------------------------------------
+// 全局 U8g2 对象 和 软件 I2C 引脚定义
+// ----------------------------------------------------------------------------
+// !!! 请根据你的实际接线修改 SCL 和 SDA 引脚 !!!
+#define SW_I2C_PIN_SCL 6 // OLED SCL -> Arduino D6 (示例修改)
+#define SW_I2C_PIN_SDA 7 // OLED SDA -> Arduino D7 (示例修改)
+#define OLED_PIN_RST U8X8_PIN_NONE // 如果不使用 RST 引脚
+
+// --- 修改U8G2构造函数以使用页缓冲模式 (RAM占用更小) ---
+// 从 U8G2_SSD1306_128X64_NONAME_F_SW_I2C (全缓冲)
+// 改为 U8G2_SSD1306_128X64_NONAME_1_SW_I2C (页缓冲, 1/8屏幕高度的RAM)
+// 这将显著减少RAM使用量。_2_SW_I2C 使用两倍于_1_的RAM，但可能稍快。
+U8G2_SSD1306_128X64_NONAME_1_SW_I2C u8g2( // <--- 主要修改点在这里
+    U8G2_R0,            // 旋转: 无旋转
+    SW_I2C_PIN_SCL,     // SCL 引脚
+    SW_I2C_PIN_SDA,     // SDA 引脚
+    OLED_PIN_RST        // Reset 引脚
+);
+
+// ----------------------------------------------------------------------------
+// 时钟参数 (与之前相同)
+// ----------------------------------------------------------------------------
+const int SCREEN_WIDTH = 128;
+const int SCREEN_HEIGHT = 64;
+const int CLOCK_CENTER_X = SCREEN_WIDTH / 2 -1 ;
+const int CLOCK_CENTER_Y = SCREEN_HEIGHT / 2 -1;
+const int CLOCK_RADIUS = SCREEN_HEIGHT / 2 - 4;
+
+const int HOUR_HAND_LENGTH = CLOCK_RADIUS * 0.55;
+const int MINUTE_HAND_LENGTH = CLOCK_RADIUS * 0.75;
+const int SECOND_HAND_LENGTH = CLOCK_RADIUS * 0.85;
+
+// 模拟时间变量 (与之前相同)
+unsigned long previousMillis = 0;
+int currentHours = 10;
+int currentMinutes = 10;
+int currentSeconds = 30;
+
+
+// ----------------------------------------------------------------------------
+// 内部辅助函数：绘制表盘元素 (刻度、数字等)
+// ----------------------------------------------------------------------------
+void drawClockFaceElements() {
+  // 1. 绘制表盘外圈 (与之前相同)
+  u8g2.drawCircle(CLOCK_CENTER_X, CLOCK_CENTER_Y, CLOCK_RADIUS);
+  u8g2.drawCircle(CLOCK_CENTER_X, CLOCK_CENTER_Y, CLOCK_RADIUS - 1);
+
+  // 2. 绘制小时刻度和数字
+  u8g2.setFont(u8g2_font_u8glib_4_tf); // 选择一个非常小的字体
+  int textHeightApprox = 4;
+  int numDisplayRadius = CLOCK_RADIUS - 7;
+
+  char numBuffer[4]; // 用于存储转换后的数字字符串 (e.g., "12\0")
+
+  for (int i = 1; i <= 12; ++i) {
+    float angleDeg = (i * 30.0) - 90.0;
+    float angleRad = angleDeg * DEG_TO_RAD;
+
+    // --- 绘制刻度线 (与之前相同) ---
+    int x1_tick, y1_tick, x2_tick, y2_tick;
+    if (i % 3 == 0) {
+      x1_tick = CLOCK_CENTER_X + (CLOCK_RADIUS - 5) * cos(angleRad);
+      y1_tick = CLOCK_CENTER_Y + (CLOCK_RADIUS - 5) * sin(angleRad);
+      x2_tick = CLOCK_CENTER_X + (CLOCK_RADIUS - 1) * cos(angleRad);
+      y2_tick = CLOCK_CENTER_Y + (CLOCK_RADIUS - 1) * sin(angleRad);
+      u8g2.drawLine(x1_tick, y1_tick, x2_tick, y2_tick);
+    } else {
+      x1_tick = CLOCK_CENTER_X + (CLOCK_RADIUS - 3) * cos(angleRad);
+      y1_tick = CLOCK_CENTER_Y + (CLOCK_RADIUS - 3) * sin(angleRad);
+      x2_tick = CLOCK_CENTER_X + (CLOCK_RADIUS - 1) * cos(angleRad);
+      y2_tick = CLOCK_CENTER_Y + (CLOCK_RADIUS - 1) * sin(angleRad);
+      u8g2.drawLine(x1_tick, y1_tick, x2_tick, y2_tick);
+    }
+
+    // --- 绘制小时数字 (修改以避免 String 对象) ---
+    // String numStr = String(i); // 旧方法，占用较多RAM且可能导致碎片
+    sprintf(numBuffer, "%d", i); // 新方法: 将数字格式化到字符数组中
+                                 // 对于1-12的数字, `itoa(i, numBuffer, 10);` 也可以
+    
+    int strWidth = u8g2.getStrWidth(numBuffer); // 使用 numBuffer
+
+    int numX_center = CLOCK_CENTER_X + numDisplayRadius * cos(angleRad);
+    int numY_center = CLOCK_CENTER_Y + numDisplayRadius * sin(angleRad);
+
+    int drawNumX = numX_center - (strWidth / 2);
+    int drawNumY = numY_center + (textHeightApprox / 2) -1;
+
+    u8g2.drawStr(drawNumX, drawNumY, numBuffer); // 使用 numBuffer
+  }
+
+  // 3. 绘制更突出的中心圆点 (与之前相同)
+  u8g2.drawDisc(CLOCK_CENTER_X, CLOCK_CENTER_Y, 3);
+  u8g2.drawCircle(CLOCK_CENTER_X,CLOCK_CENTER_Y, 1);
+}
+
+// ----------------------------------------------------------------------------
+// 内部辅助函数：绘制时钟指针 (与之前相同)
+// ----------------------------------------------------------------------------
+void drawClockHands(int h, int m, int s) {
+  float angleRad;
+
+  h = h % 12;
+  if (h == 0) { h = 12; }
+
+  // 时针
+  float hourAngleDeg = ((h + m / 60.0 + s / 3600.0) * 30.0) - 90.0;
+  angleRad = hourAngleDeg * DEG_TO_RAD;
+  int hourHandX = CLOCK_CENTER_X + HOUR_HAND_LENGTH * cos(angleRad);
+  int hourHandY = CLOCK_CENTER_Y + HOUR_HAND_LENGTH * sin(angleRad);
+  u8g2.drawLine(CLOCK_CENTER_X, CLOCK_CENTER_Y, hourHandX, hourHandY);
+  u8g2.drawLine(CLOCK_CENTER_X+1, CLOCK_CENTER_Y, hourHandX+1, hourHandY); // 尝试加粗
+
+  // 分针
+  float minuteAngleDeg = ((m + s / 60.0) * 6.0) - 90.0;
+  angleRad = minuteAngleDeg * DEG_TO_RAD;
+  int minuteHandX = CLOCK_CENTER_X + MINUTE_HAND_LENGTH * cos(angleRad);
+  int minuteHandY = CLOCK_CENTER_Y + MINUTE_HAND_LENGTH * sin(angleRad);
+  u8g2.drawLine(CLOCK_CENTER_X, CLOCK_CENTER_Y, minuteHandX, minuteHandY);
+
+  // 秒针
+  float secondAngleDeg = (s * 6.0) - 90.0;
+  angleRad = secondAngleDeg * DEG_TO_RAD;
+  int secondHandX = CLOCK_CENTER_X + SECOND_HAND_LENGTH * cos(angleRad);
+  int secondHandY = CLOCK_CENTER_Y + SECOND_HAND_LENGTH * sin(angleRad);
+  u8g2.drawLine(CLOCK_CENTER_X, CLOCK_CENTER_Y, secondHandX, secondHandY);
+}
+
+
+// ============================================================================
+// 封装的函数 1: U8G2 初始化 (与之前相同)
+// ============================================================================
+void U8G2_Init() {
+  u8g2.begin();
+  u8g2.setDrawColor(1); // 确保绘图颜色为1 (亮)
+  // u8g2.setFontMode(1); // 设置为透明字体背景模式，如果需要文字叠加而不覆盖背景
+                        // 默认是0 (不透明)，对于这个时钟，透明可能更好看
+                        // 注意: 透明模式可能比不透明模式稍慢
+  // 在页模式下，setFontMode需要在每个绘图周期（do-while内）或每次setFont后设置
+}
+
+// ============================================================================
+// 封装的函数 2: 显示时钟 (与之前相同, 结构已兼容页缓冲)
+// ============================================================================
+void displayOLEDClock(int hours, int minutes, int seconds) {
+  u8g2.firstPage();
+  do {
+    // 在页缓冲模式下，每次循环U8g2会自动清除当前页的缓冲区
+    // 因此不需要 u8g2.clearBuffer()
+
+    // 如果设置了特定的字体模式 (如透明)，最好在这里或绘图函数内部再次设置
+    // u8g2.setFontMode(1); 
+
+    drawClockFaceElements();
+    drawClockHands(hours, minutes, seconds);
+
+  } while (u8g2.nextPage());
+}
+
+
+// ----------------------------------------------------------------------------
+// Arduino Setup (与之前相同)
+// ----------------------------------------------------------------------------
+void setup(void) {
+  U8G2_Init();
+}
+
+// ----------------------------------------------------------------------------
+// Arduino Loop (与之前相同)
+// ----------------------------------------------------------------------------
+void loop(void) {
+  unsigned long currentMillis = millis();
+
+  if (currentMillis - previousMillis >= 1000) {
+    previousMillis = currentMillis;
+    currentSeconds++;
+    if (currentSeconds >= 60) {
+      currentSeconds = 0;
+      currentMinutes++;
+      if (currentMinutes >= 60) {
+        currentMinutes = 0;
+        currentHours++;
+        if (currentHours >= 24) {
+          currentHours = 0;
+        }
+      }
+    }
+  }
+  displayOLEDClock(currentHours, currentMinutes, currentSeconds);
+}
+#endif
+
+
+#if defined(OLEDLCD)
+#include <Arduino.h>
+#include <DS1302.h>
+#include <LiquidCrystal.h> // LCD1602 显示头文件
+#include <U8g2lib.h> // 引入 U8g2 库
+#include "Config.h"      // 配置文件, 包含所有 #define
+
+// LCD 初始化
+LiquidCrystal lcd(LCD_RS_PIN, LCD_EN_PIN, LCD_D4_PIN, LCD_D5_PIN, LCD_D6_PIN, LCD_D7_PIN);
+
+// DS1302 RTC 对象
+DS1302 rtc(DS1302_CE_PIN, DS1302_IO_PIN, DS1302_SCLK_PIN);
+
+// --- 修改U8G2构造函数以使用页缓冲模式 (RAM占用更小) ---
+// 从 U8G2_SSD1306_128X64_NONAME_F_SW_I2C (全缓冲)
+// 改为 U8G2_SSD1306_128X64_NONAME_1_SW_I2C (页缓冲, 1/8屏幕高度的RAM)
+// 这将显著减少RAM使用量。_2_SW_I2C 使用两倍于_1_的RAM，但可能稍快。
+U8G2_SSD1306_128X64_NONAME_F_SW_I2C u8g2( // <--- 主要修改点在这里
+    U8G2_R0,            // 旋转: 无旋转
+    SW_I2C_PIN_SCL,     // SCL 引脚
+    SW_I2C_PIN_SDA,     // SDA 引脚
+    OLED_PIN_RST        // Reset 引脚
+);
+
+// 时间日期结构体
+struct DateTime {
+    int year;
+    int month;
+    int day;
+    int hour;
+    int minute;
+    int second;
+    int dayOfWeek; // 1 (Mon) to 7 (Sun)
+};
+DateTime currentTime; // 当前时间日期 (从RTC读取)
+
+// 闹钟设置
+int alarm_hour = 7;
+int alarm_minute = 30;
+float temperatureAlarmThreshold = DEFAULT_ALARM_TEMP;
+
+// 系统状态
+enum class SystemMode { NORMAL, SET_TIME, SET_ALARM, STOPWATCH, COUNTDOWN_SET, COUNTDOWN_RUNNING };
+SystemMode currentMode = SystemMode::NORMAL;
+int settingStep = 0; // 设置步骤 (例如：0-小时, 1-分钟 ...)
+
+// 温度相关
+float currentTemperature_filtered = 0.0f;
+
+// 卡尔曼滤波器参数
+float kalman_x_hat = 0;
+float kalman_P = 1.0;
+float kalman_Q = 0.0001; // 过程噪声协方差 - 可调
+float kalman_R = 0.09;   // 测量噪声协方差 - 可调
+
+// 非阻塞控制相关变量
+unsigned long button_last_press_time_choose = 0;
+unsigned long button_last_press_time_addminus = 0;
+unsigned long button_last_press_time_add = 0;
+unsigned long button_last_press_time_add_long = 0;
+unsigned long button_last_press_time_minus_long = 0;
+unsigned long button_last_press_time_minus = 0;
+unsigned long setting_mode_entry_time = 0;
+bool buttonADDPressedLong = false;
+bool buttonMINUSPressedLong = false;
+
+unsigned long hourly_chime_last_triggered_hour = 25; // 用于整点报时 (初始值确保第一次能响)
+unsigned long clock_alarm_sound_start_time = 0;
+bool clock_alarm_active = false;
+unsigned long temp_alarm_last_beep_time = 0;
+
+// 秒表 (正向计时器) 状态变量
+bool stopwatch_running;
+unsigned long stopwatch_start_millis; // 记录秒表开始或从暂停继续时的 millis()
+unsigned long stopwatch_elapsed_at_pause; // 记录暂停时的已用时间
+
+// 倒计时器状态变量
+int countdown_set_hours;
+int countdown_set_minutes;
+int countdown_set_seconds;
+unsigned long countdown_total_set_seconds; // 总设置的倒计时秒数
+unsigned long countdown_target_millis;     // 倒计时结束的目标 millis()
+bool countdown_running;
+bool countdown_beeping; // 是否正在蜂鸣提示
+unsigned long countdown_beep_start_millis;
+int countdown_setting_step; // 0:H, 1:M, 2:S
+
+// ----------------------------------------------------------------------------
+// 时钟参数 
+// ----------------------------------------------------------------------------
+const int SCREEN_WIDTH = 128;
+const int SCREEN_HEIGHT = 64;
+const int CLOCK_CENTER_X = SCREEN_WIDTH / 2 -1 ;
+const int CLOCK_CENTER_Y = SCREEN_HEIGHT / 2 -1;
+const int CLOCK_RADIUS = SCREEN_HEIGHT / 2 - 4;
+
+const int HOUR_HAND_LENGTH = CLOCK_RADIUS * 0.55;
+const int MINUTE_HAND_LENGTH = CLOCK_RADIUS * 0.75;
+const int SECOND_HAND_LENGTH = CLOCK_RADIUS * 0.85;
+
+
+
+// ==== 函数声明 ====
+void readAndUpdateTimeFromRTC();
+void calculateDayOfWeek(DateTime& dt);
+String getDayOfWeekString(int dow);
+int daysInMonth(int year, int month); // 返回指定年月的天数
+
+void displayTimeScreen();
+void displaySetTimeScreen(const DateTime& tempTime, int step);
+void displayStopwatchScreen(unsigned long elapsed_ms, bool is_running);
+void displayCountdownSetScreen(int h, int m, int s, int currentSettingStep) ;
+void displayCountdownRunningScreen(unsigned long remaining_s, bool is_active, bool is_beeping);
+void displaySetAlarmScreen(int tempHour, int tempMin, float tempAlarmTemp, int step);
+
+// OLED显示函数
+void drawClockFaceElements();
+void drawClockHands(int h, int m, int s);
+void U8G2_Init();
+void displayOLEDClock(int hours, int minutes, int seconds);
+
+
+void formatNumber(int col, int row, int num, int digits = 2); // 格式化数字输出（前导零）
+void printFloat(int col, int row, float val, int decimalPlaces, int totalDigitsBeforeDecimal); // 格式化浮点数输出
+
+
+void handleNormalMode();
+void handleTimeSettingMode();
+void handleStopwatchMode();
+void handleCountdownSetMode();
+void handleCountdownRunningMode();
+void handleAlarmSettingMode();
+void enterTimeSettingMode();
+void enterAlarmSettingMode();
+void enterStopwatchMode();
+void enterCountdownSetMode();
+void enterCountdownRunningMode();
+
+void exitSettingModeAndSave(bool saveTimeToRTC, bool saveAlarm); // 退出设置模式并选择是否保存
+
+void checkAndTriggerHourlyChime();
+void checkAndTriggerClockAlarm();
+void handleActiveClockAlarmSound(); // 处理正在鸣响的闹钟（非阻塞）
+void stopClockAlarmSound();        // 停止闹钟声音
+void checkAndTriggerTemperatureAlarm();
+
+void readAndUpdateTemperature();
+float applyKalmanFilter(float measurement); // 应用卡尔曼滤波
+void handleKalmanSerialConfig();           // 通过串口配置卡尔曼参数
+
+bool checkButtonPress(int pin, unsigned long& lastPressTime, unsigned long debounceInterval); // 检测按钮单击
+bool checkLongButtonPress(int pin, bool& pressStateFlag, unsigned long& pressStartTime, unsigned long thresholdMillis); // 检测长按
+bool checkMultiButtonPress(int pin1, int pin2, unsigned long& lastPressTime, unsigned long debounceInterval); // 检测多键组合按下
+bool checkButtonHeld(int pin, unsigned long& lastActionTime, unsigned long actionInterval);    // 检测按钮按住状态（用于连续调整）
+
+
+void setup() {
+    pinMode(LCD_RS_PIN, OUTPUT);
+    pinMode(LCD_EN_PIN, OUTPUT);
+    pinMode(LCD_D4_PIN, OUTPUT);
+    pinMode(LCD_D5_PIN, OUTPUT);
+    pinMode(LCD_D6_PIN, OUTPUT);
+    pinMode(LCD_D7_PIN, OUTPUT);
+    pinMode(BUZZER_TONE_PIN, OUTPUT);
+
+    pinMode(BUTTON_CHOOSE_PIN, INPUT_PULLUP);
+    pinMode(BUTTON_ADD_PIN, INPUT_PULLUP);
+    pinMode(BUTTON_MINUS_PIN, INPUT_PULLUP);
+
+#ifdef __Serial_DEBUG__
+    Serial.begin(9600);
+    Serial.println("Initializing...");
+#endif
+    lcd.begin(16, 2);
+
+    rtc.writeProtect(false);
+    rtc.halt(false);
+
+    Time t = rtc.getTime();
+    // 检查RTC时间是否大致有效，如果无效则设置一个默认时间
+    if ( t.mon < 1 || t.mon > 12 || t.date < 1 || t.date > 31) { // 更严格的年份下限
+        Serial.println("RTC not set or invalid. Setting default time (2025-01-01 12:00:00).");
+        rtc.setTime(12, 0, 0);        // 12:00:00
+        rtc.setDate(1,1,2025);      // 2025-Jan-01 DD,MM,YYYY for DS1302.h library
+    }
+    readAndUpdateTimeFromRTC(); // 从RTC获取初始时间
+
+    long initial_adc_val = analogRead(TEMP_SENSOR_PIN);
+    kalman_x_hat = (500.0 * initial_adc_val) / 1023.0; // 初始化卡尔曼滤波器估计值
+    currentTemperature_filtered = kalman_x_hat;
+
+    hourly_chime_last_triggered_hour = currentTime.hour; // 避免启动时立即报时
+
+    lcd.clear();
+    U8G2_Init(); // 初始化 OLED 显示
+}
+
+void loop() {
+    unsigned long currentMillis = millis();
+    static bool oledNeedsRedraw = true; // 初始强制绘制一次
+    static unsigned long lastOledUpdateMillis = 0;
+    if (oledNeedsRedraw) {
+        displayOLEDClock(currentTime.hour, currentTime.minute, currentTime.second); // OLED显示时钟
+        oledNeedsRedraw = false;
+    }
+    if(currentMillis - lastOledUpdateMillis >= 1000) {
+        lastOledUpdateMillis = currentMillis;
+        oledNeedsRedraw = true; // 每秒强制重绘
+    }
+
+
+    if (currentMode == SystemMode::NORMAL) {
+        handleNormalMode();
+    } else if (currentMode == SystemMode::SET_TIME) {
+        handleTimeSettingMode();
+    } else if (currentMode == SystemMode::SET_ALARM) {
+        handleAlarmSettingMode();
+    } else if (currentMode == SystemMode::STOPWATCH) {
+        handleStopwatchMode();
+    } else if (currentMode == SystemMode::COUNTDOWN_SET) {
+        handleCountdownSetMode();
+    } else if (currentMode == SystemMode::COUNTDOWN_RUNNING) {
+        handleCountdownRunningMode();
+    }
+
+    if (clock_alarm_active) { // 如果时间闹钟正在响，持续处理
+        handleActiveClockAlarmSound();
+    }
+    
+    // handleKalmanSerialConfig(); // 任何模式下都可以调整卡尔曼参数 删除此功能以减少RAM占用，增加此函数RAM会溢出
+
+    delay(50); // 主循环延时，平衡响应速度和CPU占用
+}
+
+// --- 时间获取与处理 ---
+void readAndUpdateTimeFromRTC() {
+    Time t = rtc.getTime();
+    currentTime.year = t.year;
+    currentTime.month = t.mon;
+    currentTime.day = t.date;
+    currentTime.hour = t.hour;
+    currentTime.minute = t.min;
+    currentTime.second = t.sec;
+#ifdef __Serial_DEBUG__
+    Serial.print("RTC Time: ");
+    Serial.print(currentTime.year); Serial.print("-");
+    Serial.print(currentTime.month); Serial.print("-");
+    Serial.print(currentTime.day); Serial.print(" ");
+    Serial.print(currentTime.hour); Serial.print(":");
+    Serial.print(currentTime.minute); Serial.print(":");
+    Serial.println(currentTime.second);
+#endif
+    calculateDayOfWeek(currentTime); 
+}
+
+void calculateDayOfWeek(DateTime& dt) {
+    int d = dt.day;
+    int m = dt.month;
+    int y = dt.year;
+    int temp_m = m;
+    if (temp_m == 1) { temp_m = 13; }
+    if (temp_m == 2) { temp_m = 14; }
+    dt.dayOfWeek = (d + 2 * temp_m + 3 * (temp_m + 1) / 5 + y + y / 4 - y / 100 + y / 400) % 7 + 1;
+}
+
+String getDayOfWeekString(int dow) { 
+    switch (dow) {
+        case 1: return "Mon"; case 2: return "Tue"; case 3: return "Wed";
+        case 4: return "Thu"; case 5: return "Fri"; case 6: return "Sat";
+        case 7: return "Sun"; default: return "Err";
+    }
+}
+
+int daysInMonth(int year, int month) {
+    if (month < 1 || month > 12) return 0; 
+    if (month == 2) { 
+        return ((year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)) ? 29 : 28;
+    } else if (month == 4 || month == 6 || month == 9 || month == 11) { 
+        return 30;
+    }
+    return 31; 
+}
+
+// --- 显示函数 ---
+void formatNumber(int col, int row, int num, int digits) {
+    lcd.setCursor(col, row);
+    String s = String(num);
+    for (int i = 0; i < digits - (int)s.length(); i++) {
+        lcd.print("0");
+    }
+    lcd.print(s);
+}
+
+void printFloat(int col, int row, float val, int decimalPlaces, int totalDigitsBeforeDecimal) {
+    lcd.setCursor(col, row);
+    bool is_negative = val < 0;
+    float abs_val = abs(val);
+
+    if (is_negative) lcd.print("-");
+
+    if (abs_val < 10.0f && totalDigitsBeforeDecimal > 1) { // totalDigitsBeforeDecimal > 1 ensures we only pad if space is allocated for it
+        lcd.print("0");
+    }
+    lcd.print(abs_val, decimalPlaces);
+}
+
+
+void displayTimeScreen() {
+#ifdef __Serial_DEBUG__
+    Serial.print("Display Time: "); 
+#endif
+    // 清除表盘空白
+    lcd.setCursor(10, 0);
+    lcd.print(" ");
+    lcd.setCursor(14, 0);
+    lcd.print("  ");
+    lcd.setCursor(8, 1);
+    lcd.print(" ");
+    lcd.setCursor(15, 1);
+    lcd.print(" ");
+    static unsigned long last_display_time = 0;
+    unsigned long current_millis = millis();
+    static int last_second_displayed = -1;
+
+    if (currentTime.second != last_second_displayed || current_millis - last_display_time > 1000) {
+        last_display_time = current_millis;
+        last_second_displayed = currentTime.second;
+
+        formatNumber(0, 0, currentTime.year, 4); lcd.print("-");
+        formatNumber(5, 0, currentTime.month, 2); lcd.print("-");
+        formatNumber(8, 0, currentTime.day, 2);
+        lcd.setCursor(11, 0); lcd.print(getDayOfWeekString(currentTime.dayOfWeek)); lcd.print(" "); 
+
+        formatNumber(0, 1, currentTime.hour, 2); lcd.print(":");
+        formatNumber(3, 1, currentTime.minute, 2); lcd.print(":");
+        formatNumber(6, 1, currentTime.second, 2);
+
+        printFloat(9, 1, currentTemperature_filtered, 1, 2); 
+        lcd.print((char)223); lcd.print("C "); 
+    }
+}
+
+void displaySetTimeScreen(const DateTime& tempTime, int step) {
+    lcd.clear(); 
+    lcd.setCursor(0, 0); 
+
+    lcd.setCursor(0,0);
+    if (settingStep == 5) lcd.print(">"); else lcd.print(" "); formatNumber(1, 0, tempTime.year, 4); 
+    lcd.setCursor(5,0);
+    if (settingStep == 4) lcd.print(">"); else lcd.print("-"); formatNumber(6, 0, tempTime.month, 2);  
+    lcd.setCursor(9,0);
+    if (settingStep == 3) lcd.print(">"); else lcd.print("-"); formatNumber(9,0, tempTime.day, 2); 
+    lcd.setCursor(13,0);
+    lcd.print("Set");
+
+    lcd.setCursor(0,1);
+    if (settingStep == 0) lcd.print(">"); else lcd.print(" "); formatNumber(1, 1, tempTime.hour, 2); lcd.print(":"); 
+    lcd.setCursor(4,1);
+    if (settingStep == 1) lcd.print(">"); else lcd.print(" "); formatNumber(5, 1, tempTime.minute, 2); lcd.print(":"); 
+    lcd.setCursor(8,1);
+    if (settingStep == 2) lcd.print(">"); else lcd.print(" "); formatNumber(9,1, tempTime.second, 2);
+    lcd.setCursor(13,1); lcd.print("Tim");
+}
+
+#define LCD_LASTLINE 15 // LCD最后一行的列数
+void displayStopwatchScreen(unsigned long elapsed_ms, bool is_running) {
+    unsigned long total_seconds = elapsed_ms / 1000;
+    unsigned long disp_hours = total_seconds / 3600;
+    unsigned long disp_minutes = (total_seconds % 3600) / 60;
+    unsigned long disp_seconds = total_seconds % 60;
+    unsigned long disp_tenths = (elapsed_ms % 1000) / 100; // 取十分之一秒
+
+    // 第一行: 状态提示
+    lcd.setCursor(0, 0);
+    if (is_running) {
+        lcd.print("Stopwatch: RUN "); // 状态 + 一个空格清尾
+    } else {
+        if (elapsed_ms > 0) {
+            lcd.print("Stopwatch:PAUSE");
+        } else {
+            lcd.print("Stopwatch:READY"); // READY后面多一个空格清尾
+        }
+    }
+    // 清理第一行末尾可能存在的旧字符
+    for (int i = LCD_LASTLINE; i < 16; ++i) {
+        lcd.print(" ");
+    }
+
+
+    // 第二行: 时间显示
+    // 如果有小时数，则显示 HH:MM:SS
+    // 否则显示 MM:SS.T (T 代表十分之一秒)
+    lcd.setCursor(0, 1);
+    if (disp_hours > 0) {
+        formatNumber(0, 1, disp_hours, 2);
+        lcd.print(":");
+        formatNumber(3, 1, disp_minutes, 2);
+        lcd.print(":");
+        formatNumber(6, 1, disp_seconds, 2);
+        lcd.print("        "); // 清理后面，确保覆盖 MM:SS.T 格式
+    } else {
+        formatNumber(0, 1, disp_minutes, 2);
+        lcd.print(":");
+        formatNumber(3, 1, disp_seconds, 2);
+        lcd.print(".");
+        lcd.print(disp_tenths); // 显示十分之一秒
+        lcd.print("          "); // 清理后面，确保覆盖 HH:MM:SS 格式
+    }
+}
+
+
+void displayCountdownSetScreen(int h, int m, int s, int currentSettingStep) {
+    lcd.clear(); // 通常在进入设置界面时或每次按键后清屏重绘
+    lcd.setCursor(0, 0);
+    lcd.print("Set Countdown:");
+
+    // 小时设置
+    lcd.setCursor(0, 1);
+    if (currentSettingStep == 0) lcd.print(">"); else lcd.print(" ");
+    formatNumber(1, 1, h, 2);
+    lcd.print("H");
+
+    // 分钟设置
+    lcd.setCursor(5, 1);
+    if (currentSettingStep == 1) lcd.print(">"); else lcd.print(" ");
+    formatNumber(6, 1, m, 2);
+    lcd.print("M");
+
+    // 秒数设置
+    lcd.setCursor(10, 1);
+    if (currentSettingStep == 2) lcd.print(">"); else lcd.print(" ");
+    formatNumber(11, 1, s, 2);
+    lcd.print("S");
+    
+    // 提示用户如何开始 (可选，如果空间足够)
+    // lcd.setCursor(15,0); lcd.print(">"); // 例如用 > 代表 "Next/Start"
+}
+// display.cpp (部分)
+
+void displayCountdownRunningScreen(unsigned long remaining_s, bool is_active, bool is_beeping) {
+    unsigned long disp_hours = remaining_s / 3600;
+    unsigned long disp_minutes = (remaining_s % 3600) / 60;
+    unsigned long disp_seconds = remaining_s % 60;
+
+    // 第一行: 状态提示
+    lcd.setCursor(0, 0);
+    if (is_beeping) {
+        lcd.print("Countdown: END! "); // 结束并蜂鸣
+    } else if (is_active) {
+        lcd.print("Countdown: RUN  "); // 正在运行
+    } else {
+        lcd.print("Countdown:PAUSE "); // 暂停
+    }
+     // 清理第一行末尾可能存在的旧字符
+    for (int i = LCD_LASTLINE; i < 16; ++i) {
+        lcd.print(" ");
+    }
+
+
+    // 第二行: 剩余时间显示 HH MM SS (用空格分隔，更清晰)
+    lcd.setCursor(0, 1);
+    formatNumber(0, 1, disp_hours, 2);
+    lcd.print("H ");
+    formatNumber(4, 1, disp_minutes, 2);
+    lcd.print("M ");
+    formatNumber(8, 1, disp_seconds, 2);
+    lcd.print("S   "); // 清理后面
+}
+
+void displaySetAlarmScreen(int tempHour, int tempMin, float tempAlarmTemp, int step) {
+    lcd.clear();
+    lcd.setCursor(0, 0); lcd.print("Set Alarm:");
+    lcd.setCursor(0, 1);
+
+    if (step == 0) lcd.print(">"); else lcd.print(" "); formatNumber(1, 1, tempHour, 2); lcd.print(":");
+    lcd.setCursor(5, 1);
+    if (step == 1) lcd.print(">"); else lcd.print(" "); formatNumber(6, 1, tempMin, 2);
+
+    lcd.setCursor(10, 1);
+    if (step == 2) lcd.print(">"); else lcd.print(" ");
+    printFloat(11, 1, tempAlarmTemp, 0, 2); 
+    lcd.print((char)223); lcd.print("C");
+}
+
+
+// ----------------------------------------------------------------------------
+// 内部辅助函数：绘制表盘元素 (刻度、数字等)
+// ----------------------------------------------------------------------------
+void drawClockFaceElements() {
+  // 1. 绘制表盘外圈 (与之前相同)
+  u8g2.drawCircle(CLOCK_CENTER_X, CLOCK_CENTER_Y, CLOCK_RADIUS);
+  u8g2.drawCircle(CLOCK_CENTER_X, CLOCK_CENTER_Y, CLOCK_RADIUS - 1);
+
+  // 2. 绘制小时刻度和数字
+  u8g2.setFont(u8g2_font_u8glib_4_tf); // 选择一个非常小的字体
+  int textHeightApprox = 4;
+  int numDisplayRadius = CLOCK_RADIUS - 7;
+
+  char numBuffer[4]; // 用于存储转换后的数字字符串 (e.g., "12\0")
+
+  for (int i = 1; i <= 12; ++i) {
+    float angleDeg = (i * 30.0) - 90.0;
+    float angleRad = angleDeg * DEG_TO_RAD;
+
+    // --- 绘制刻度线 (与之前相同) ---
+    int x1_tick, y1_tick, x2_tick, y2_tick;
+    if (i % 3 == 0) {
+      x1_tick = CLOCK_CENTER_X + (CLOCK_RADIUS - 5) * cos(angleRad);
+      y1_tick = CLOCK_CENTER_Y + (CLOCK_RADIUS - 5) * sin(angleRad);
+      x2_tick = CLOCK_CENTER_X + (CLOCK_RADIUS - 1) * cos(angleRad);
+      y2_tick = CLOCK_CENTER_Y + (CLOCK_RADIUS - 1) * sin(angleRad);
+      u8g2.drawLine(x1_tick, y1_tick, x2_tick, y2_tick);
+    } else {
+      x1_tick = CLOCK_CENTER_X + (CLOCK_RADIUS - 3) * cos(angleRad);
+      y1_tick = CLOCK_CENTER_Y + (CLOCK_RADIUS - 3) * sin(angleRad);
+      x2_tick = CLOCK_CENTER_X + (CLOCK_RADIUS - 1) * cos(angleRad);
+      y2_tick = CLOCK_CENTER_Y + (CLOCK_RADIUS - 1) * sin(angleRad);
+      u8g2.drawLine(x1_tick, y1_tick, x2_tick, y2_tick);
+    }
+
+    // --- 绘制小时数字 (修改以避免 String 对象) ---
+    // String numStr = String(i); // 旧方法，占用较多RAM且可能导致碎片
+    sprintf(numBuffer, "%d", i); // 新方法: 将数字格式化到字符数组中
+                                 // 对于1-12的数字, `itoa(i, numBuffer, 10);` 也可以
+    
+    int strWidth = u8g2.getStrWidth(numBuffer); // 使用 numBuffer
+
+    int numX_center = CLOCK_CENTER_X + numDisplayRadius * cos(angleRad);
+    int numY_center = CLOCK_CENTER_Y + numDisplayRadius * sin(angleRad);
+
+    int drawNumX = numX_center - (strWidth / 2);
+    int drawNumY = numY_center + (textHeightApprox / 2) -1;
+
+    u8g2.drawStr(drawNumX, drawNumY, numBuffer); // 使用 numBuffer
+  }
+
+  // 3. 绘制更突出的中心圆点
+  u8g2.drawDisc(CLOCK_CENTER_X, CLOCK_CENTER_Y, 3);
+  u8g2.drawCircle(CLOCK_CENTER_X,CLOCK_CENTER_Y, 1);
+}
+
+// ----------------------------------------------------------------------------
+// 内部辅助函数：绘制时钟指针 
+// ----------------------------------------------------------------------------
+void drawClockHands(int h, int m, int s) {
+  float angleRad;
+
+  h = h % 12;
+  if (h == 0) { h = 12; }
+
+  // 时针
+  float hourAngleDeg = ((h + m / 60.0 + s / 3600.0) * 30.0) - 90.0;
+  angleRad = hourAngleDeg * DEG_TO_RAD;
+  int hourHandX = CLOCK_CENTER_X + HOUR_HAND_LENGTH * cos(angleRad);
+  int hourHandY = CLOCK_CENTER_Y + HOUR_HAND_LENGTH * sin(angleRad);
+  u8g2.drawLine(CLOCK_CENTER_X, CLOCK_CENTER_Y, hourHandX, hourHandY);
+  u8g2.drawLine(CLOCK_CENTER_X+1, CLOCK_CENTER_Y, hourHandX+1, hourHandY); // 尝试加粗
+
+  // 分针
+  float minuteAngleDeg = ((m + s / 60.0) * 6.0) - 90.0;
+  angleRad = minuteAngleDeg * DEG_TO_RAD;
+  int minuteHandX = CLOCK_CENTER_X + MINUTE_HAND_LENGTH * cos(angleRad);
+  int minuteHandY = CLOCK_CENTER_Y + MINUTE_HAND_LENGTH * sin(angleRad);
+  u8g2.drawLine(CLOCK_CENTER_X, CLOCK_CENTER_Y, minuteHandX, minuteHandY);
+
+  // 秒针
+  float secondAngleDeg = (s * 6.0) - 90.0;
+  angleRad = secondAngleDeg * DEG_TO_RAD;
+  int secondHandX = CLOCK_CENTER_X + SECOND_HAND_LENGTH * cos(angleRad);
+  int secondHandY = CLOCK_CENTER_Y + SECOND_HAND_LENGTH * sin(angleRad);
+  u8g2.drawLine(CLOCK_CENTER_X, CLOCK_CENTER_Y, secondHandX, secondHandY);
+}
+
+
+// ============================================================================
+// 封装的函数 1: U8G2 初始化
+// ============================================================================
+void U8G2_Init() {
+  u8g2.begin();
+  u8g2.setDrawColor(1); // 确保绘图颜色为1 (亮)
+  // u8g2.setFontMode(1); // 设置为透明字体背景模式，如果需要文字叠加而不覆盖背景
+                        // 默认是0 (不透明)，对于这个时钟，透明可能更好看
+                        // 注意: 透明模式可能比不透明模式稍慢
+  // 在页模式下，setFontMode需要在每个绘图周期（do-while内）或每次setFont后设置
+}
+
+// ============================================================================
+// 封装的函数 2: 显示时钟 
+// ============================================================================
+void displayOLEDClock(int hours, int minutes, int seconds) {
+  u8g2.firstPage();
+  do {
+    // 在页缓冲模式下，每次循环U8g2会自动清除当前页的缓冲区
+    // 因此不需要 u8g2.clearBuffer()
+
+    // 如果设置了特定的字体模式 (如透明)，最好在这里或绘图函数内部再次设置
+    // u8g2.setFontMode(1); 
+
+    drawClockFaceElements();
+    drawClockHands(hours, minutes, seconds);
+
+  } while (u8g2.nextPage());
+}
+
+
+// --- 模式处理 ---
+void handleNormalMode() {
+    readAndUpdateTimeFromRTC();
+    readAndUpdateTemperature();
+    displayTimeScreen();
+
+    checkAndTriggerHourlyChime();
+    checkAndTriggerClockAlarm();
+    checkAndTriggerTemperatureAlarm();
+
+    if (checkButtonPress(BUTTON_CHOOSE_PIN, button_last_press_time_choose, BUTTON_DEBOUNCE_DELAY * 2)) {
+        enterTimeSettingMode();
+        return;
+    }
+
+    if(checkLongButtonPress(BUTTON_ADD_PIN, buttonADDPressedLong, button_last_press_time_add, BUTTON_DEBOUNCE_DELAY * BUTTON_LONGTIME_Multiple)) {
+        enterStopwatchMode();
+        return;
+    }
+    // 类似地为倒计时添加一个按键逻辑 (例如长按MINUS)
+    if (checkLongButtonPress(BUTTON_MINUS_PIN, buttonMINUSPressedLong, button_last_press_time_minus_long, BUTTON_DEBOUNCE_DELAY * BUTTON_LONGTIME_Multiple))
+    {
+        // (需要为 button_last_press_time_minus_long 在 globals.h 和 .ino 中声明和定义)
+        enterCountdownSetMode();
+        return;
+    }
+
+    static unsigned long combo_press_start_time = 0;
+    bool add_low = (digitalRead(BUTTON_ADD_PIN) == LOW);
+    bool minus_low = (digitalRead(BUTTON_MINUS_PIN) == LOW);
+
+    if (add_low && minus_low) { 
+        if (combo_press_start_time == 0) { 
+            combo_press_start_time = millis();
+        } else if (millis() - combo_press_start_time > BUTTON_DEBOUNCE_DELAY * 4) { 
+            enterAlarmSettingMode();
+            combo_press_start_time = 0; 
+            return;
+        }
+    } else { 
+        combo_press_start_time = 0;
+    }
+}
+
+DateTime tempSettingTime; 
+
+void enterTimeSettingMode() {
+    currentMode = SystemMode::SET_TIME;
+    settingStep = 0; 
+    tempSettingTime = currentTime; 
+    setting_mode_entry_time = millis(); 
+    lcd.clear();
+    displaySetTimeScreen(tempSettingTime, settingStep);
+}
+
+void enterStopwatchMode() {
+    currentMode = SystemMode::STOPWATCH;
+    stopwatch_running = false;
+    stopwatch_start_millis = 0;
+    stopwatch_elapsed_at_pause = 0; // 重置秒表
+    setting_mode_entry_time = millis(); // 用于可能的超时或返回逻辑
+    lcd.clear();
+    displayStopwatchScreen(0, stopwatch_running); // 初始显示 00:00.0
+    // (displayStopwatchScreen 需要知道当前状态来显示 "Start", "Pause", "Resume")
+}
+void enterCountdownSetMode() {
+    currentMode = SystemMode::COUNTDOWN_SET;
+    countdown_setting_step = 0; // 开始设置小时
+    countdown_running = false;  // 确保计时器未运行
+    countdown_beeping = false;  // 确保不在蜂鸣
+    noTone(BUZZER_TONE_PIN);    // 停止可能存在的蜂鸣
+    setting_mode_entry_time = millis();
+    lcd.clear();
+    displayCountdownSetScreen(countdown_set_hours, countdown_set_minutes, countdown_set_seconds, countdown_setting_step);
+}
+
+// 内部辅助函数，从设置模式转换到运行模式
+void enterCountdownRunningMode()
+{
+    countdown_total_set_seconds = (unsigned long)countdown_set_hours * 3600 +
+                                (unsigned long)countdown_set_minutes * 60 +
+                                countdown_set_seconds;
+
+    if (countdown_total_set_seconds == 0)
+    { // 如果设置时间为0，则不启动
+        // 可以选择返回设置模式或显示错误提示
+        // 为简单起见，我们可能不允许启动0秒倒计时，或让它立即结束并蜂鸣
+        // 这里假设如果为0，则停留在设置模式，或者在handleCountdownSetMode中阻止 >2 后直接启动
+        return;
+    }
+
+    currentMode = SystemMode::COUNTDOWN_RUNNING;
+    countdown_running = true;
+    countdown_beeping = false;
+    countdown_target_millis = millis() + countdown_total_set_seconds * 1000UL;
+    // displayCountdownRunningScreen(countdown_total_set_seconds, countdown_running);
+}
+
+int tempSettingAlarmHour, tempSettingAlarmMinute;
+float tempSettingAlarmTemp;
+
+void enterAlarmSettingMode() {
+    currentMode = SystemMode::SET_ALARM;
+    settingStep = 0; 
+    tempSettingAlarmHour = alarm_hour;
+    tempSettingAlarmMinute = alarm_minute;
+    tempSettingAlarmTemp = temperatureAlarmThreshold;
+    setting_mode_entry_time = millis();
+    lcd.clear();
+    displaySetAlarmScreen(tempSettingAlarmHour, tempSettingAlarmMinute, tempSettingAlarmTemp, settingStep);
+}
+
+void exitSettingModeAndSave(bool saveTimeToRTC, bool saveAlarm) {
+    if (saveTimeToRTC) {
+        rtc.setTime(tempSettingTime.hour, tempSettingTime.minute, tempSettingTime.second);
+        rtc.setDate(tempSettingTime.day, tempSettingTime.month, tempSettingTime.year);
+#ifdef __Serial_DEBUG__
+        Serial.print("RTC set to: ");
+        Serial.print(tempSettingTime.year); Serial.print("-");
+        Serial.print(tempSettingTime.month); Serial.print("-"); 
+        Serial.print(tempSettingTime.day); Serial.print(" ");
+        Serial.print(tempSettingTime.hour); Serial.print(":");
+        Serial.print(tempSettingTime.minute); Serial.print(":");
+        Serial.println(tempSettingTime.second);
+#endif
+        readAndUpdateTimeFromRTC(); 
+    }
+    if (saveAlarm) {
+        alarm_hour = tempSettingAlarmHour;
+        alarm_minute = tempSettingAlarmMinute;
+        temperatureAlarmThreshold = tempSettingAlarmTemp;
+    }
+    currentMode = SystemMode::NORMAL;
+    lcd.clear();
+    displayTimeScreen(); 
+}
+
+void handleTimeSettingMode() {
+    if (millis() - setting_mode_entry_time > 30000) {  
+        lcd.clear();
+        lcd.setCursor(0,0); lcd.print("Set Timeout"); delay(500); 
+        exitSettingModeAndSave(false, false);
+        return;
+    }
+
+    bool needs_redraw = false;
+    if (checkMultiButtonPress(BUTTON_ADD_PIN, BUTTON_MINUS_PIN, button_last_press_time_addminus, BUTTON_DEBOUNCE_DELAY)) {
+        lcd.clear();
+        lcd.setCursor(0,0); lcd.print("Force Quit!"); delay(500); 
+        exitSettingModeAndSave(false, false);
+        return;
+    }
+
+    if (checkButtonPress(BUTTON_CHOOSE_PIN, button_last_press_time_choose, BUTTON_DEBOUNCE_DELAY * 2)) {
+        setting_mode_entry_time = millis(); 
+        settingStep++;
+        if (settingStep > 5) { 
+            exitSettingModeAndSave(true, false); 
+            return;
+        }
+        needs_redraw = true;
+    }
+
+    if (checkButtonHeld(BUTTON_ADD_PIN, button_last_press_time_add, BUTTON_DEBOUNCE_DELAY)) {
+        setting_mode_entry_time = millis(); needs_redraw = true;
+        switch (settingStep) {
+            case 0: // Hour
+                tempSettingTime.hour++;
+                if(tempSettingTime.hour >= 24) {
+                    tempSettingTime.hour = 0; // 小时在0-23间循环
+                    if(tempSettingTime.day == daysInMonth(tempSettingTime.year, tempSettingTime.month)) {
+                        tempSettingTime.day = 1;
+                        tempSettingTime.month++;
+                        if (tempSettingTime.month > 12) {
+                            tempSettingTime.month = 1;
+                            tempSettingTime.year++;
+                            // if (tempSettingTime.year > 2099) tempSettingTime.year = 2099; // 年份上限
+                        }
+                    } else {
+                        tempSettingTime.day++;
+                    }
+                }
+                break;
+            case 1: // Minute
+                tempSettingTime.minute++;
+                if (tempSettingTime.minute >= 60) {
+                    tempSettingTime.minute = 0;
+                    tempSettingTime.hour++;
+                    if (tempSettingTime.hour >= 24) {
+                        tempSettingTime.hour = 0; // 小时在0-23间循环
+                        if (tempSettingTime.day == daysInMonth(tempSettingTime.year, tempSettingTime.month)) {
+                            tempSettingTime.day = 1;
+                            tempSettingTime.month++;
+                            if (tempSettingTime.month > 12) {
+                                tempSettingTime.month = 1;
+                                tempSettingTime.year++;
+                                // if (tempSettingTime.year > 2099) tempSettingTime.year = 2099; // 年份上限
+                            }
+                        } else {
+                            tempSettingTime.day++;
+                        }
+                    }
+                }
+                break;
+            case 2: // Second
+                tempSettingTime.second++;
+                if (tempSettingTime.second >= 60) {
+                    tempSettingTime.second = 0;
+                    tempSettingTime.minute++;
+                    if (tempSettingTime.minute >= 60) {
+                        tempSettingTime.minute = 0;
+                        tempSettingTime.hour++;
+                        if (tempSettingTime.hour >= 24) {
+                            tempSettingTime.hour = 0; // 小时在0-23间循环
+                            if (tempSettingTime.day == daysInMonth(tempSettingTime.year, tempSettingTime.month)) {
+                                tempSettingTime.day = 1;
+                                tempSettingTime.month++;
+                                if (tempSettingTime.month > 12) {
+                                    tempSettingTime.month = 1;
+                                    tempSettingTime.year++;
+                                    // if (tempSettingTime.year > 2099) tempSettingTime.year = 2099; // 年份上限
+                                }
+                            } else {
+                                tempSettingTime.day++;
+                            }
+                        }
+                    }
+                }
+                break;
+            case 3: // 日期增加
+                tempSettingTime.day++;
+                if (tempSettingTime.day > daysInMonth(tempSettingTime.year, tempSettingTime.month)) {
+                    tempSettingTime.day = 1;
+                    tempSettingTime.month++;
+                    if (tempSettingTime.month > 12) {
+                        tempSettingTime.month = 1;
+                        tempSettingTime.year++;
+                        // if (tempSettingTime.year > 2099) tempSettingTime.year = 2099; // 年份上限
+                    }
+                }
+                break;
+            case 4: // 月份增加
+                tempSettingTime.month++;
+                if (tempSettingTime.month > 12) {
+                    tempSettingTime.month = 1;
+                    tempSettingTime.year++;
+                    // if (tempSettingTime.year > 2099) tempSettingTime.year = 2099; // 年份上限
+                }
+                break;
+            case 5: // 年份增加
+                tempSettingTime.year++;
+                // if (tempSettingTime.year > 2099) tempSettingTime.year = 2099; // 年份上限
+                break;
+        }
+    }
+
+    if (checkButtonHeld(BUTTON_MINUS_PIN, button_last_press_time_minus, BUTTON_DEBOUNCE_DELAY)) {
+        setting_mode_entry_time = millis(); needs_redraw = true;
+        switch (settingStep) {
+            case 0: // Hour
+                tempSettingTime.hour--;
+                if (tempSettingTime.hour < 0) {
+                    tempSettingTime.hour = 23; // 小时在0-23间循环
+                    tempSettingTime.day--;
+                    if (tempSettingTime.day < 1) {
+                        tempSettingTime.month--;
+                        if (tempSettingTime.month < 1) {
+                            tempSettingTime.month = 12;
+                            tempSettingTime.year--;
+                            // if (tempSettingTime.year < 2000) tempSettingTime.year = 2000; // 年份下限
+                        }
+                        tempSettingTime.day = daysInMonth(tempSettingTime.year, tempSettingTime.month); 
+                    }
+                }
+                break;
+            case 1: // Minute
+                tempSettingTime.minute--;
+                if (tempSettingTime.minute < 0) {
+                    tempSettingTime.minute = 59;
+                    tempSettingTime.hour--;
+                    if (tempSettingTime.hour < 0) {
+                        tempSettingTime.hour = 23; // 小时在0-23间循环
+                        tempSettingTime.day--;
+                        if (tempSettingTime.day < 1) {
+                            tempSettingTime.month--;
+                            if (tempSettingTime.month < 1) {
+                                tempSettingTime.month = 12;
+                                tempSettingTime.year--;
+                                // if (tempSettingTime.year < 2000) tempSettingTime.year = 2000; // 年份下限
+                            }
+                            tempSettingTime.day = daysInMonth(tempSettingTime.year, tempSettingTime.month); 
+                        }
+                    }
+                }
+                break;
+            case 2: // Second
+                tempSettingTime.second--;
+                if (tempSettingTime.second < 0) {
+                    tempSettingTime.second = 59;
+                    tempSettingTime.minute--;
+                    if (tempSettingTime.minute < 0) {
+                        tempSettingTime.minute = 59;
+                        tempSettingTime.hour--;
+                        if (tempSettingTime.hour < 0) {
+                            tempSettingTime.hour = 23; // 小时在0-23间循环
+                            tempSettingTime.day--;
+                            if (tempSettingTime.day < 1) {
+                                tempSettingTime.month--;
+                                if (tempSettingTime.month < 1) {
+                                    tempSettingTime.month = 12;
+                                    tempSettingTime.year--;
+                                    // if (tempSettingTime.year < 2000) tempSettingTime.year = 2000; // 年份下限
+                                }
+                                tempSettingTime.day = daysInMonth(tempSettingTime.year, tempSettingTime.month); 
+                            }
+                        }
+                    }
+                }
+                break;
+            case 3: // 日期减少
+                tempSettingTime.day--;
+                if (tempSettingTime.day < 1) {
+                    tempSettingTime.month--;
+                    if (tempSettingTime.month < 1) {
+                        tempSettingTime.month = 12;
+                        tempSettingTime.year--;
+                        // if (tempSettingTime.year < 2000) tempSettingTime.year = 2000; // 年份下限
+                    }
+                    tempSettingTime.day = daysInMonth(tempSettingTime.year, tempSettingTime.month); 
+                }
+                break;
+            case 4: // 月份减少
+                tempSettingTime.month--;
+                if (tempSettingTime.month < 1) {
+                    tempSettingTime.month = 12;
+                    tempSettingTime.year--;
+                    // if (tempSettingTime.year < 2000) tempSettingTime.year = 2000; // 年份下限
+                }
+                break;
+            case 5: // 年份减少
+                tempSettingTime.year--;
+                // if (tempSettingTime.year < 2000) tempSettingTime.year = 2000; // 年份下限
+                break;
+        }
+    }
+    
+    if (needs_redraw) { 
+        int max_days = daysInMonth(tempSettingTime.year, tempSettingTime.month);
+        if (tempSettingTime.day > max_days) {
+            tempSettingTime.day = max_days;
+        }
+        displaySetTimeScreen(tempSettingTime, settingStep); 
+    }
+}
+
+
+void handleStopwatchMode() {
+    unsigned long current_millis = millis();
+    unsigned long display_elapsed_ms = 0;
+
+    // 按键逻辑:
+    // CHOOSE: Start / Pause / Resume
+    // ADD (短按/单击): Lap (暂不实现，过于复杂) / Reset (当停止或暂停时)
+    // MINUS (长按或其他组合): Exit to NORMAL mode
+
+    if (checkButtonPress(BUTTON_CHOOSE_PIN, button_last_press_time_choose, BUTTON_DEBOUNCE_DELAY * 2)) {
+        setting_mode_entry_time = current_millis; // 重置不活动超时
+        if (stopwatch_running) { // 正在运行 -> 暂停
+            stopwatch_running = false;
+            stopwatch_elapsed_at_pause += (current_millis - stopwatch_start_millis); // 累加本次运行时间
+        } else { // 已停止或暂停 -> 开始/继续
+            stopwatch_running = true;
+            stopwatch_start_millis = current_millis; // 记录新的开始点
+        }
+    }
+
+    // ADD 按钮: 在暂停或停止状态下按ADD键重置秒表
+    if (!stopwatch_running && checkButtonPress(BUTTON_ADD_PIN, button_last_press_time_add, BUTTON_DEBOUNCE_DELAY * 2)) {
+        setting_mode_entry_time = current_millis;
+        stopwatch_elapsed_at_pause = 0; // 完全重置
+        stopwatch_start_millis = 0;     // 确保下次开始时从0计时
+        // (如果需要，可以加一个确认步骤或长按才重置)
+    }
+    
+    // MINUS 按钮 (示例: 长按退出)
+    // 这里用一个简化的逻辑，实际项目中可能需要更复杂的长按检测
+    // 或者使用与进入闹钟设置类似的同时按键组合退出
+    // static unsigned long minus_hold_start_time = 0;
+    // if (digitalRead(BUTTON_MINUS_PIN) == LOW) {
+    //     if (minus_hold_start_time == 0) {
+    //         minus_hold_start_time = current_millis;
+    //     } else if (current_millis - minus_hold_start_time > BUTTON_DEBOUNCE_DELAY) { // 短按
+    //         minus_hold_start_time = 0; // 重置
+    //         exitSettingModeAndSave(false, false); // 退出设置模式
+            
+    //         lcd.clear(); // displayTimeScreen 会处理清屏
+    //         return; // 退出 handleStopwatchMode
+    //     }
+    // } else {
+    //     minus_hold_start_time = 0;
+    // }
+    if(checkMultiButtonPress(BUTTON_ADD_PIN, BUTTON_MINUS_PIN, button_last_press_time_addminus, BUTTON_DEBOUNCE_DELAY)) {
+        lcd.clear();
+        lcd.setCursor(0,0); lcd.print("Quit Timer MODE!"); delay(500); 
+        exitSettingModeAndSave(false, false); // 退出设置模式
+    }
+
+    // 计算要显示的时间
+    if (stopwatch_running) {
+        display_elapsed_ms = stopwatch_elapsed_at_pause + (current_millis - stopwatch_start_millis);
+    } else {
+        display_elapsed_ms = stopwatch_elapsed_at_pause;
+    }
+
+    // 调用显示函数 (需要在 display.cpp 中实现)
+    displayStopwatchScreen(display_elapsed_ms, stopwatch_running);
+    // 示例显示逻辑 (应在 displayStopwatchScreen 中实现)
+    unsigned long total_seconds = display_elapsed_ms / 1000;
+    unsigned long disp_hours = total_seconds / 3600;
+    unsigned long disp_minutes = (total_seconds % 3600) / 60;
+    unsigned long disp_seconds = total_seconds % 60;
+    unsigned long disp_tenths = (display_elapsed_ms % 1000) / 100;
+
+    lcd.setCursor(0, 0);
+    if (stopwatch_running) {
+        lcd.print("Timing: RUNNING");
+#ifdef __Serial_DEBUG__
+        Serial.print("Timing: RUNNING");
+        Serial.println(display_elapsed_ms);
+#endif
+    }
+    else if (stopwatch_elapsed_at_pause > 0) {
+        lcd.print("Timing: PAUSED");
+#ifdef __Serial_DEBUG__
+        Serial.print("Timing: PAUSED ");
+        Serial.println(display_elapsed_ms);
+#endif
+    }
+    else {
+        lcd.print("Timing: READY ");
+#ifdef __Serial_DEBUG__
+        Serial.print("Timing: READY ");
+        Serial.println(display_elapsed_ms);
+#endif
+    }
+        
+
+    lcd.setCursor(0, 1);
+    if (disp_hours > 0) {
+        formatNumber(0, 1, disp_hours, 2); lcd.print(":");
+        formatNumber(3, 1, disp_minutes, 2); lcd.print(":");
+        formatNumber(6, 1, disp_seconds, 2); lcd.print("   "); // HH:MM:SS
+    } else {
+        formatNumber(0, 1, disp_minutes, 2); lcd.print(":"); // MM:SS.T
+        formatNumber(3, 1, disp_seconds, 2); lcd.print(".");
+        lcd.print(disp_tenths); lcd.print("  ");
+    }
+    // 在第二行显示操作提示，例如 "CH:S/P ADD:Rst"
+    lcd.setCursor(7,0); // 清除之前可能存在的提示
+    lcd.print("        "); // 清除提示
+    lcd.setCursor(7,0);
+    if(stopwatch_running) lcd.print("CH:Pa"); else lcd.print("CH:Go");
+    if(!stopwatch_running) {lcd.setCursor(13,0); lcd.print("A:R");}
+
+
+}
+
+
+void handleCountdownSetMode() {
+    if (millis() - setting_mode_entry_time > 30000) { // 30秒超时
+        currentMode = SystemMode::NORMAL; // 返回主时钟界面
+        lcd.clear(); 
+        return;
+    }
+    if(checkMultiButtonPress(BUTTON_ADD_PIN, BUTTON_MINUS_PIN, button_last_press_time_addminus, BUTTON_DEBOUNCE_DELAY)) {
+        lcd.clear();
+        lcd.setCursor(0,0); lcd.print("Quit Counter MODE!"); delay(500); 
+        exitSettingModeAndSave(false, false); // 退出设置模式
+    }
+
+    bool needs_redraw = false;
+
+    if (checkButtonPress(BUTTON_CHOOSE_PIN, button_last_press_time_choose, BUTTON_DEBOUNCE_DELAY * 2)) {
+        setting_mode_entry_time = millis();
+        countdown_setting_step++;
+        if (countdown_setting_step > 2) { // H, M, S 都设置过了
+            // 再次按 CHOOSE 键启动倒计时
+            countdown_total_set_seconds = (unsigned long)countdown_set_hours * 3600 +
+                                          (unsigned long)countdown_set_minutes * 60 +
+                                          countdown_set_seconds;
+            if (countdown_total_set_seconds > 0) {
+                enterCountdownRunningMode(); // 直接转换到运行模式
+                return; // 已切换模式，退出此函数
+            } else {
+                // 如果总时间为0，可以选择不启动，并将步骤重置为0
+                countdown_setting_step = 0; 
+            }
+        }
+        needs_redraw = true;
+    }
+
+    if (checkButtonHeld(BUTTON_ADD_PIN, button_last_press_time_add, BUTTON_DEBOUNCE_DELAY)) {
+        setting_mode_entry_time = millis(); needs_redraw = true;
+        switch (countdown_setting_step) {
+            case 0: countdown_set_hours = (countdown_set_hours + 1) % 24; break; // 最多23小时
+            case 1: countdown_set_minutes = (countdown_set_minutes + 1) % 60; break;
+            case 2: countdown_set_seconds = (countdown_set_seconds + 1) % 60; break;
+        }
+    }
+
+    if (checkButtonHeld(BUTTON_MINUS_PIN, button_last_press_time_minus, BUTTON_DEBOUNCE_DELAY)) {
+        setting_mode_entry_time = millis(); needs_redraw = true;
+        switch (countdown_setting_step) {
+            case 0: countdown_set_hours = (countdown_set_hours - 1 + 24) % 24; break;
+            case 1: countdown_set_minutes = (countdown_set_minutes - 1 + 60) % 60; break;
+            case 2: countdown_set_seconds = (countdown_set_seconds - 1 + 60) % 60; break;
+        }
+    }
+    
+    // // MINUS 按钮长按退出 (示例)
+    // static unsigned long minus_hold_start_time_cds = 0;
+    // if (digitalRead(BUTTON_MINUS_PIN) == LOW) {
+    //     if (checkButtonHeld(BUTTON_MINUS_PIN, minus_hold_start_time_cds, BUTTON_DEBOUNCE_DELAY*BUTTON_LONGTIME_Multiple) && minus_hold_start_time_cds != button_last_press_time_minus ) { // 确保不是短按触发的
+    //         exitSettingModeAndSave(false, false); // 退出设置模式
+    //         return; // 退出倒计时设置模式
+    //         // 这里可以添加一个提示，例如 "长按退出"
+    //         // 上面 checkButtonHeld 会更新 minus_hold_start_time_cds, 所以这里的条件需要小心
+    //     }
+    // } else {
+    //     minus_hold_start_time_cds = 0;
+    // }
+
+
+    if (needs_redraw) {
+        displayCountdownSetScreen(countdown_set_hours, countdown_set_minutes, countdown_set_seconds, countdown_setting_step);
+        // lcd.clear();
+        // lcd.setCursor(0,0); lcd.print("Set Countdown:");
+        
+        // lcd.setCursor(0,1);
+        // if(countdown_setting_step == 0) lcd.print(">"); else lcd.print(" "); formatNumber(1,1,countdown_set_hours,2); lcd.print("H");
+        // lcd.setCursor(5,1);
+        // if(countdown_setting_step == 1) lcd.print(">"); else lcd.print(" "); formatNumber(6,1,countdown_set_minutes,2); lcd.print("M");
+        // lcd.setCursor(10,1);
+        // if(countdown_setting_step == 2) lcd.print(">"); else lcd.print(" "); formatNumber(11,1,countdown_set_seconds,2); lcd.print("S");
+    }
+}
+
+void handleCountdownRunningMode()
+{
+    unsigned long current_millis = millis();
+    unsigned long display_remaining_s = 0;
+
+    // --- 状态更新 ---
+    if (countdown_beeping)
+    {
+        // 蜂鸣逻辑
+        unsigned long beep_duration = 3000; // 总蜂鸣时长3秒
+        unsigned long beep_interval = 400;  // 响0.2秒，停0.2秒
+        if (current_millis - countdown_beep_start_millis > beep_duration)
+        {
+            countdown_beeping = false;
+            noTone(BUZZER_TONE_PIN);
+            enterCountdownSetMode(); // 蜂鸣结束，返回设置模式
+            return;
+        }
+        // 间歇鸣响
+        if (((current_millis - countdown_beep_start_millis) / (beep_interval / 2)) % 2 == 0)
+        {
+            tone(BUZZER_TONE_PIN, ALARM_SOUND_FREQ, beep_interval / 2 - 20);
+        }
+        else
+        {
+            noTone(BUZZER_TONE_PIN);
+        }
+        display_remaining_s = 0;
+    }
+    else if (countdown_running)
+    {
+        if (current_millis >= countdown_target_millis)
+        {
+            // 倒计时结束
+            countdown_running = false;
+            countdown_beeping = true;
+            countdown_beep_start_millis = current_millis;
+            // 触发第一次蜂鸣
+            tone(BUZZER_TONE_PIN, ALARM_SOUND_FREQ, 100); // 短促提示音
+            display_remaining_s = 0;
+        }
+        else
+        {
+            display_remaining_s = (countdown_target_millis - current_millis + 500) / 1000UL; // +500 for rounding
+        }
+    }
+    else
+    { // 暂停状态
+        // 在暂停时，显示的是暂停时的剩余秒数，这个秒数在暂停时已经被计算并存储
+        // 这里需要一个变量来存储暂停时的剩余秒数，或者重新计算
+        // 为简单起见，我们假设 countdown_target_millis 存储的是原始目标，
+        // 当暂停并继续时，countdown_target_millis 需要被调整。
+        // 或者，我们用一个 countdown_remaining_at_pause_ms 变量
+        // 这里我们让显示保持在暂停时的值，但需要确保这个值被正确获取
+        // unsigned long paused_remaining_ms = countdown_target_millis - millis(); // 这是如果没暂停会剩余的时间
+        //                                                                         // 实际上，应该在暂停时记录剩余时间
+        display_remaining_s = countdown_total_set_seconds - ((millis() - (countdown_target_millis - countdown_total_set_seconds * 1000UL)) / 1000UL);
+        // 上述计算复杂，更简单的方式是在暂停时存下剩余秒数
+        // 此处简化：假设我们有一个变量 `countdown_seconds_at_pause`
+        // display_remaining_s = countdown_seconds_at_pause;
+        // 临时的简化：直接显示0，表示暂停且未到时间
+        if (countdown_target_millis > current_millis)
+        { // 仅当目标时间未到
+            display_remaining_s = (countdown_target_millis - current_millis + 500) / 1000UL;
+        }
+        else
+        {
+            display_remaining_s = 0; // 如果因为某种原因暂停时目标时间已过
+        }
+        // **修正：暂停逻辑**
+        // 当暂停时，我们需要记录还剩下多少毫秒，当继续时，从当前millis加上这些剩余毫秒得到新的目标
+        // 为简化，此处的暂停仅停止屏幕更新和蜂鸣器，不精确处理暂停/继续的计时补偿。
+        // 也就是说，暂停期间时间仍在流逝，再次“继续”会从当前时间点算起。
+        // 一个更健壮的实现需要 `countdown_remaining_ms_at_pause`
+    }
+
+    // --- 按键处理 ---
+    if (checkButtonPress(BUTTON_CHOOSE_PIN, button_last_press_time_choose, BUTTON_DEBOUNCE_DELAY * 2))
+    {
+        if (countdown_beeping)
+        {
+            countdown_beeping = false;
+            noTone(BUZZER_TONE_PIN);
+            enterCountdownSetMode(); // 返回设置模式
+            return;
+        }
+        else if (countdown_running)
+        { // 正在运行 -> 暂停
+            countdown_running = false;
+            // 在此记录剩余时间，以便精确继续
+            // countdown_remaining_ms_at_pause = countdown_target_millis - current_millis;
+            noTone(BUZZER_TONE_PIN); // 如果在倒计时结束前暂停，确保蜂鸣器不响
+        }
+        else
+        { // 已暂停 -> 继续 (或如果时间已到，则直接进入蜂鸣或设置)
+            if (current_millis < countdown_target_millis)
+            { // 只有当目标时间还没到，才能继续
+                countdown_running = true;
+                // 如果实现了精确暂停:
+                // countdown_target_millis = current_millis + countdown_remaining_ms_at_pause;
+            }
+            else
+            {                              // 如果暂停时时间已经到了或过去了，直接去蜂鸣或设置
+                countdown_running = false; // 确保不在运行
+                if (!countdown_beeping)
+                { // 如果还没开始蜂鸣
+                    countdown_beeping = true;
+                    countdown_beep_start_millis = current_millis;
+                    tone(BUZZER_TONE_PIN, ALARM_SOUND_FREQ, 100);
+                }
+            }
+        }
+    }
+
+    // MINUS 按钮 (短按或长按): 停止并返回设置模式
+    if (checkButtonPress(BUTTON_MINUS_PIN, button_last_press_time_minus, BUTTON_DEBOUNCE_DELAY * 2))
+    {
+        countdown_running = false;
+        countdown_beeping = false;
+        noTone(BUZZER_TONE_PIN);
+        enterCountdownSetMode(); // 返回设置模式
+        return;
+    }
+
+    // --- 显示 ---
+    // displayCountdownRunningScreen(display_remaining_s, countdown_running || countdown_beeping);
+    // 示例显示逻辑 (应在 displayCountdownRunningScreen 中实现)
+    unsigned long r_h = display_remaining_s / 3600;
+    unsigned long r_m = (display_remaining_s % 3600) / 60;
+    unsigned long r_s = display_remaining_s % 60;
+
+    lcd.setCursor(0, 0);
+    if (countdown_beeping)
+    {
+        lcd.print("Countdown: END!");
+    }
+    else if (countdown_running)
+    {
+        lcd.print("Countdown: RUN ");
+    }
+    else
+    {
+        lcd.print("Countdown: PAUSE");
+    }
+
+    lcd.setCursor(0, 1);
+    formatNumber(0, 1, r_h, 2);
+    lcd.print("H ");
+    formatNumber(4, 1, r_m, 2);
+    lcd.print("M ");
+    formatNumber(8, 1, r_s, 2);
+    lcd.print("S   "); // 清理后面
+}
+
+void handleAlarmSettingMode() {
+    if (millis() - setting_mode_entry_time > 30000)
+    {
+        exitSettingModeAndSave(false, false);
+        lcd.setCursor(0, 0);
+        lcd.print("Set Timeout");
+        delay(1000);
+        lcd.clear();
+        return;
+    }
+    bool needs_redraw = false;
+
+    if (checkButtonPress(BUTTON_CHOOSE_PIN, button_last_press_time_choose, BUTTON_DEBOUNCE_DELAY * 2)) {
+        setting_mode_entry_time = millis();
+        settingStep++;
+        if (settingStep > 2) { 
+            exitSettingModeAndSave(false, true); 
+            return;
+        }
+        needs_redraw = true;
+    }
+
+    if (checkButtonHeld(BUTTON_ADD_PIN, button_last_press_time_add, BUTTON_DEBOUNCE_DELAY)) {
+        setting_mode_entry_time = millis(); needs_redraw = true;
+        switch (settingStep) {
+            case 0: tempSettingAlarmHour = (tempSettingAlarmHour + 1) % 24; break;
+            case 1: tempSettingAlarmMinute = (tempSettingAlarmMinute + 1) % 60; break;
+            case 2: tempSettingAlarmTemp += 1.0f; if (tempSettingAlarmTemp > 99.0f) tempSettingAlarmTemp = 99.0f; break;
+        }
+    }
+
+    if (checkButtonHeld(BUTTON_MINUS_PIN, button_last_press_time_minus, BUTTON_DEBOUNCE_DELAY)) {
+        setting_mode_entry_time = millis(); needs_redraw = true;
+        switch (settingStep) {
+            case 0: tempSettingAlarmHour = (tempSettingAlarmHour - 1 + 24) % 24; break;
+            case 1: tempSettingAlarmMinute = (tempSettingAlarmMinute - 1 + 60) % 60; break;
+            case 2: tempSettingAlarmTemp -= 1.0f; if (tempSettingAlarmTemp < 0.0f) tempSettingAlarmTemp = 0.0f; break;
+        }
+    }
+
+    if (needs_redraw) {
+        displaySetAlarmScreen(tempSettingAlarmHour, tempSettingAlarmMinute, tempSettingAlarmTemp, settingStep);
+    }
+}
+
+
+// --- 报警功能 ---
+void checkAndTriggerHourlyChime() {
+    if (currentTime.minute == 0 && currentTime.second == 0) {
+        if (currentTime.hour != (int)hourly_chime_last_triggered_hour) { 
+            tone(BUZZER_TONE_PIN, HOURLY_CHIME_FREQ, HOURLY_CHIME_DURATION);
+            hourly_chime_last_triggered_hour = currentTime.hour;
+        }
+    }
+}
+
+void checkAndTriggerClockAlarm() {
+    if (clock_alarm_active) return; 
+
+    if (currentTime.hour == alarm_hour &&
+        currentTime.minute == alarm_minute &&
+        currentTime.second == 0) { 
+        clock_alarm_active = true;
+        clock_alarm_sound_start_time = millis(); 
+    }
+}
+
+void handleActiveClockAlarmSound() {
+    if (!clock_alarm_active) return;
+
+    unsigned long current_millis = millis();
+    if (current_millis - clock_alarm_sound_start_time > ALARM_DURATION) {
+        stopClockAlarmSound();
+        return;
+    }
+
+    if (digitalRead(BUTTON_CHOOSE_PIN) == LOW ||
+        digitalRead(BUTTON_ADD_PIN) == LOW ||
+        digitalRead(BUTTON_MINUS_PIN) == LOW) {
+        stopClockAlarmSound();
+        delay(BUTTON_DEBOUNCE_DELAY * 2); 
+        return;
+    }
+
+    static unsigned long last_beep_toggle_time = 0;
+    unsigned long beep_interval = 500; 
+
+    if (current_millis - last_beep_toggle_time > beep_interval) {
+        last_beep_toggle_time = current_millis;
+        if (((current_millis - clock_alarm_sound_start_time) / beep_interval) % 2 == 0) {
+             tone(BUZZER_TONE_PIN, ALARM_SOUND_FREQ, beep_interval - 50); 
+        } else {
+             noTone(BUZZER_TONE_PIN); 
+        }
+    }
+}
+
+void stopClockAlarmSound() {
+    clock_alarm_active = false;
+    noTone(BUZZER_TONE_PIN);
+}
+
+void checkAndTriggerTemperatureAlarm() {
+    if (clock_alarm_active) return; 
+
+    if (currentTemperature_filtered >= temperatureAlarmThreshold) {
+        unsigned long current_millis = millis();
+        if (current_millis - temp_alarm_last_beep_time > TEMP_ALARM_DURATION * 10) { 
+            tone(BUZZER_TONE_PIN, ALARM_SOUND_FREQ, TEMP_ALARM_DURATION);
+            temp_alarm_last_beep_time = current_millis;
+        }
+    }
+}
+
+// --- 温度处理 ---
+void readAndUpdateTemperature() {
+    long adc_val = analogRead(TEMP_SENSOR_PIN);
+    float raw_temperature = (500.0 * adc_val) / 1023.0; 
+    currentTemperature_filtered = applyKalmanFilter(raw_temperature);
+}
+
+float applyKalmanFilter(float measurement) {
+    float P_minus = kalman_P + kalman_Q; 
+    float K = P_minus / (P_minus + kalman_R); 
+    kalman_x_hat = kalman_x_hat + K * (measurement - kalman_x_hat); 
+    kalman_P = (1 - K) * P_minus; 
+    return kalman_x_hat;
+}
+
+void handleKalmanSerialConfig() {
+    if (Serial.available() > 0) {
+        String input = Serial.readStringUntil('\n');
+        input.trim();
+        int commaIndex = input.indexOf(',');
+        if (commaIndex > 0) {
+            String q_str = input.substring(0, commaIndex);
+            String r_str = input.substring(commaIndex + 1);
+            float new_q = q_str.toFloat();
+            float new_r = r_str.toFloat();
+            if (new_q > 0 && new_r > 0) { 
+                kalman_Q = new_q;
+                kalman_R = new_r;
+                Serial.print("Kalman Q set to: "); Serial.println(kalman_Q, 6); 
+                Serial.print("Kalman R set to: "); Serial.println(kalman_R, 6);
+            } else { Serial.println("Invalid Q/R values. Must be positive."); }
+        } else { Serial.println("Invalid format. Use: Q_val,R_val (e.g., 0.01,0.1)"); }
+    }
+}
+
+// --- 按键辅助函数 ---
+bool checkButtonPress(int pin, unsigned long& lastPressTime, unsigned long debounceInterval) {
+    unsigned long current_millis = millis();
+    if (digitalRead(pin) == LOW) { 
+        if (current_millis - lastPressTime > debounceInterval) { 
+            lastPressTime = current_millis; 
+            return true; 
+        }
+    }
+    return false;
+}
+
+bool checkLongButtonPress(int pin, bool& pressStateFlag, unsigned long& pressStartTime, unsigned long thresholdMillis) {
+    if (digitalRead(pin) == LOW) {
+        if (!pressStateFlag) {
+            pressStateFlag = true;
+            pressStartTime = millis();
+        } else {
+            if (millis() - pressStartTime >= thresholdMillis) {
+                pressStateFlag = false; // 避免重复触发
+                return true; // 长按成功触发
+            }
+        }
+    } else {
+        pressStateFlag = false; // 松开按钮，重置状态
+    }
+    return false;
+}
+
+
+bool checkMultiButtonPress(int pin1, int pin2, unsigned long& lastPressTime, unsigned long debounceInterval) {
+    unsigned long current_millis = millis();
+    if (digitalRead(pin1) == LOW && digitalRead(pin2) == LOW) { 
+        if (current_millis - lastPressTime > debounceInterval) { 
+            lastPressTime = current_millis; 
+            return true; 
+        }
+    }
+    return false;
+    
+}
+
+bool checkButtonHeld(int pin, unsigned long& lastActionTime, unsigned long actionInterval) {
+     unsigned long current_millis = millis();
+    if (digitalRead(pin) == LOW) { 
+        if (current_millis - lastActionTime > actionInterval) { 
+            lastActionTime = current_millis; 
+            return true; 
+        }
+    }
+    return false;
 }
 #endif

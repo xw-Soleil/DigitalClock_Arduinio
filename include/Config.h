@@ -40,7 +40,7 @@
 #define TEMP_SENSOR_PIN A3
 
 // Constants
-#define BUTTON_DEBOUNCE_DELAY 70 // ms, for button debouncing
+#define BUTTON_DEBOUNCE_DELAY 200 // ms, for button debouncing
 #define DEFAULT_ALARM_TEMP 40.0f // Default temperature alarm threshold
 #define HOURLY_CHIME_FREQ 2093   // Hz, frequency for hourly chime
 #define ALARM_SOUND_FREQ 2093    // Hz, frequency for alarm sound

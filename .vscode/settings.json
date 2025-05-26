@@ -70,6 +70,7 @@
   "files.associations": {
     "*.scs": "spectre",
     "clock_display.C": "cpp",
-    "beifen": "c"
+    "beifen": "c",
+    "codes": "c"
   }
 }

@@ -1,4 +1,5 @@
-
+// File: main.cpp
+#if defined(DEBUG_MODE)
 #if defined(INITIAL)
 #include <Arduino.h>
 #include <DS1302.h>
@@ -1278,7 +1279,7 @@ bool checkButtonHeld(int pin, unsigned long& lastActionTime, unsigned long actio
 #endif
 #define OLEDLCD
 
-#define __Serial_DEBUG___
+#define __Serial_DEBUG__
 #ifndef CONFIG_H
 #define CONFIG_H
 
@@ -3170,7 +3171,7 @@ void loop(void) {
 // 从 U8G2_SSD1306_128X64_NONAME_F_SW_I2C (全缓冲)
 // 改为 U8G2_SSD1306_128X64_NONAME_1_SW_I2C (页缓冲, 1/8屏幕高度的RAM)
 // 这将显著减少RAM使用量。_2_SW_I2C 使用两倍于_1_的RAM，但可能稍快。
-U8G2_SSD1306_128X64_NONAME_1_SW_I2C u8g2( // <--- 主要修改点在这里
+U8G2_SSD1306_128X64_NONAME_F_SW_I2C u8g2( // <--- 主要修改点在这里
     U8G2_R0,            // 旋转: 无旋转
     SW_I2C_PIN_SCL,     // SCL 引脚
     SW_I2C_PIN_SDA,     // SDA 引脚
@@ -3349,6 +3350,487 @@ void loop(void) {
 }
 #endif
 
+#if defined(OLEDTEST5)
+#include <Arduino.h>
+#include <U8g2lib.h> // 引入 U8g2 库
+
+// ----------------------------------------------------------------------------
+// 全局 U8g2 对象 和 软件 I2C 引脚定义
+// ----------------------------------------------------------------------------
+#define SW_I2C_PIN_SCL 6
+#define SW_I2C_PIN_SDA 7
+#define OLED_PIN_RST U8X8_PIN_NONE
+
+// 使用页缓冲模式 _1_ 以节省RAM
+U8G2_SSD1306_128X64_NONAME_F_SW_I2C u8g2(
+    U8G2_R0,
+    SW_I2C_PIN_SCL,
+    SW_I2C_PIN_SDA,
+    OLED_PIN_RST
+);
+
+// ----------------------------------------------------------------------------
+// 时钟参数
+// ----------------------------------------------------------------------------
+const int SCREEN_WIDTH = 128;
+const int SCREEN_HEIGHT = 64;
+const int CLOCK_CENTER_X = SCREEN_WIDTH / 2 -1 ;
+const int CLOCK_CENTER_Y = SCREEN_HEIGHT / 2 -1;
+const int CLOCK_RADIUS = SCREEN_HEIGHT / 2 - 4;
+
+// 指针长度
+const int HOUR_HAND_LENGTH = CLOCK_RADIUS * 0.55;
+const int MINUTE_HAND_LENGTH = CLOCK_RADIUS * 0.75;
+const int SECOND_HAND_LENGTH = CLOCK_RADIUS * 0.85;
+
+// 模拟时间变量
+unsigned long previousMillis = 0;
+int currentHours = 10;
+int currentMinutes = 10;
+int currentSeconds = 30;
+
+// --- 用于存储预计算数据的全局数组 ---
+// 使用 int8_t 存储坐标，因为屏幕坐标范围小 (-64 to 63 relative to center, or 0-127 absolute)
+// 如果 CLOCK_CENTER_X/Y 较大，可能需要 int16_t，但对于128x64，int8_t 相对中心偏移是够的
+// 或者直接存储绝对坐标用 uint8_t (0-127)
+struct TickData {
+    uint8_t x1, y1, x2, y2;
+};
+TickData major_tick_coords[4]; // 3, 6, 9, 12点的主刻度 (12点是第0个索引)
+TickData minor_tick_coords[8]; // 其他8个次刻度
+
+struct NumberData {
+    uint8_t x, y;
+    char str[3]; // "12" 需要3个字符 (包括'\0')
+};
+NumberData hour_numbers_data[12]; // 1点到12点
+
+// ----------------------------------------------------------------------------
+// 在setup中调用一次，预计算表盘静态元素
+// ----------------------------------------------------------------------------
+void precalculateClockFaceData() {
+    u8g2.setFont(u8g2_font_u8glib_4_tf); // 需要设置字体以获取准确的strWidth
+    int textHeightApprox = 4;
+    int numDisplayRadius = CLOCK_RADIUS - 7;
+    
+    int major_idx = 0;
+    int minor_idx = 0;
+
+    for (int i = 1; i <= 12; ++i) {
+        float angleDeg = (i * 30.0) - 90.0;
+        float angleRad = angleDeg * DEG_TO_RAD;
+
+        // 预计算刻度线坐标
+        if (i % 3 == 0) { // 主要刻度 (3, 6, 9, 12)
+            // 12点对应 i=12, angleDeg = 270. 3点对应 i=3, angleDeg=0.
+            // 为了让数组索引更直观，可以调整i的映射，或接受当前索引方式
+            // 当前 major_idx: 0 for 3点, 1 for 6点, 2 for 9点, 3 for 12点
+            major_tick_coords[major_idx].x1 = round(CLOCK_CENTER_X + (CLOCK_RADIUS - 5) * cos(angleRad));
+            major_tick_coords[major_idx].y1 = round(CLOCK_CENTER_Y + (CLOCK_RADIUS - 5) * sin(angleRad));
+            major_tick_coords[major_idx].x2 = round(CLOCK_CENTER_X + (CLOCK_RADIUS - 1) * cos(angleRad));
+            major_tick_coords[major_idx].y2 = round(CLOCK_CENTER_Y + (CLOCK_RADIUS - 1) * sin(angleRad));
+            major_idx++;
+        } else { // 次要刻度
+            minor_tick_coords[minor_idx].x1 = round(CLOCK_CENTER_X + (CLOCK_RADIUS - 3) * cos(angleRad));
+            minor_tick_coords[minor_idx].y1 = round(CLOCK_CENTER_Y + (CLOCK_RADIUS - 3) * sin(angleRad));
+            minor_tick_coords[minor_idx].x2 = round(CLOCK_CENTER_X + (CLOCK_RADIUS - 1) * cos(angleRad));
+            minor_tick_coords[minor_idx].y2 = round(CLOCK_CENTER_Y + (CLOCK_RADIUS - 1) * sin(angleRad));
+            minor_idx++;
+        }
+
+        // 预计算小时数字及其位置
+        itoa(i, hour_numbers_data[i-1].str, 10); // 数字 1-12 存入 str[0] 到 str[11]
+        
+        int strWidth = u8g2.getStrWidth(hour_numbers_data[i-1].str);
+        int numX_center = round(CLOCK_CENTER_X + numDisplayRadius * cos(angleRad));
+        int numY_center = round(CLOCK_CENTER_Y + numDisplayRadius * sin(angleRad));
+
+        hour_numbers_data[i-1].x = numX_center - (strWidth / 2);
+        hour_numbers_data[i-1].y = numY_center + (textHeightApprox / 2) - 1;
+    }
+}
+
+
+// ----------------------------------------------------------------------------
+// 内部辅助函数：绘制表盘元素 (使用预计算数据)
+// ----------------------------------------------------------------------------
+void drawClockFaceElements() {
+  // 1. 绘制表盘外圈 (这些仍然动态绘制，因为简单且数量少)
+  u8g2.drawCircle(CLOCK_CENTER_X, CLOCK_CENTER_Y, CLOCK_RADIUS);
+  u8g2.drawCircle(CLOCK_CENTER_X, CLOCK_CENTER_Y, CLOCK_RADIUS - 1);
+
+  // 2. 绘制预计算的小时刻度和数字
+  u8g2.setFont(u8g2_font_u8glib_4_tf); // 确保字体设置正确
+
+  // 绘制主要刻度
+  for (int k = 0; k < 4; ++k) {
+    u8g2.drawLine(major_tick_coords[k].x1, major_tick_coords[k].y1, major_tick_coords[k].x2, major_tick_coords[k].y2);
+  }
+  // 绘制次要刻度
+  for (int k = 0; k < 8; ++k) {
+    u8g2.drawLine(minor_tick_coords[k].x1, minor_tick_coords[k].y1, minor_tick_coords[k].x2, minor_tick_coords[k].y2);
+  }
+
+  // 绘制小时数字
+  for (int k = 0; k < 12; ++k) {
+    u8g2.drawStr(hour_numbers_data[k].x, hour_numbers_data[k].y, hour_numbers_data[k].str);
+  }
+
+  // 3. 绘制更突出的中心圆点
+  u8g2.drawDisc(CLOCK_CENTER_X, CLOCK_CENTER_Y, 3);
+  u8g2.drawCircle(CLOCK_CENTER_X,CLOCK_CENTER_Y, 1);
+}
+
+// ----------------------------------------------------------------------------
+// 内部辅助函数：绘制时钟指针 (这个函数仍然需要动态计算)
+// ----------------------------------------------------------------------------
+void drawClockHands(int h, int m, int s) {
+  float angleRad;
+
+  h = h % 12;
+  if (h == 0) { h = 12; }
+
+  // 时针 (cos/sin 计算不可避免)
+  float hourAngleDeg = ((h + m / 60.0 + s / 3600.0) * 30.0) - 90.0;
+  angleRad = hourAngleDeg * DEG_TO_RAD;
+  int hourHandX = CLOCK_CENTER_X + HOUR_HAND_LENGTH * cos(angleRad);
+  int hourHandY = CLOCK_CENTER_Y + HOUR_HAND_LENGTH * sin(angleRad);
+  u8g2.drawLine(CLOCK_CENTER_X, CLOCK_CENTER_Y, hourHandX, hourHandY);
+  // 移除了尝试加粗的第二条线，以减少绘图调用和潜在的计算波动
+  // u8g2.drawLine(CLOCK_CENTER_X+1, CLOCK_CENTER_Y, hourHandX+1, hourHandY);
+
+
+  // 分针
+  float minuteAngleDeg = ((m + s / 60.0) * 6.0) - 90.0;
+  angleRad = minuteAngleDeg * DEG_TO_RAD;
+  int minuteHandX = CLOCK_CENTER_X + MINUTE_HAND_LENGTH * cos(angleRad);
+  int minuteHandY = CLOCK_CENTER_Y + MINUTE_HAND_LENGTH * sin(angleRad);
+  u8g2.drawLine(CLOCK_CENTER_X, CLOCK_CENTER_Y, minuteHandX, minuteHandY);
+
+  // 秒针
+  float secondAngleDeg = (s * 6.0) - 90.0;
+  angleRad = secondAngleDeg * DEG_TO_RAD;
+  int secondHandX = CLOCK_CENTER_X + SECOND_HAND_LENGTH * cos(angleRad);
+  int secondHandY = CLOCK_CENTER_Y + SECOND_HAND_LENGTH * sin(angleRad);
+  u8g2.drawLine(CLOCK_CENTER_X, CLOCK_CENTER_Y, secondHandX, secondHandY);
+}
+
+
+// ============================================================================
+// U8G2 初始化
+// ============================================================================
+void U8G2INIT() {
+  u8g2.begin();
+  u8g2.setDrawColor(1);
+  // u8g2.setFontMode(1); // 如果需要文本背景透明，可以在 displayClock 中按需设置
+  precalculateClockFaceData(); // <--- 新增：调用预计算函数
+}
+
+// ============================================================================
+// 显示时钟 (主绘图函数)
+// ============================================================================
+void displayClock(int hours, int minutes, int seconds) {
+  u8g2.firstPage();
+  do {
+    // u8g2.setFontMode(1); // 若数字或未来文本需要透明背景，可在此设置
+    drawClockFaceElements(); // 现在这个函数快多了
+    drawClockHands(hours, minutes, seconds); // 这个函数仍然有动态计算
+  } while (u8g2.nextPage());
+}
+
+
+// ----------------------------------------------------------------------------
+// Arduino Setup
+// ----------------------------------------------------------------------------
+void setup(void) {
+  // Serial.begin(9600); // 可选调试
+  U8G2INIT();
+}
+
+// ----------------------------------------------------------------------------
+// Arduino Loop (使用修正后的计时逻辑)
+// ----------------------------------------------------------------------------
+void loop(void) {
+  unsigned long currentMillis = millis();
+  static bool oledNeedsRedraw = true; // 初始强制绘制
+
+  if (currentMillis - previousMillis >= 1000) {
+    previousMillis += 1000; // 保持1秒间隔的准确性
+
+    currentSeconds++;
+    oledNeedsRedraw = true;
+    if (currentSeconds >= 60) {
+      currentSeconds = 0;
+      currentMinutes++;
+      if (currentMinutes >= 60) {
+        currentMinutes = 0;
+        currentHours++;
+        if (currentHours >= 24) {
+          currentHours = 0;
+        }
+      }
+    }
+  }
+
+  if (oledNeedsRedraw) {
+    // unsigned long drawStart = micros(); // 可选: 性能分析
+    displayClock(currentHours, currentMinutes, currentSeconds);
+    // unsigned long drawDuration = micros() - drawStart;
+    // if (Serial) { Serial.print("Draw duration (us): "); Serial.println(drawDuration); }
+    oledNeedsRedraw = false;
+  }
+}
+#endif
+
+#if defined(OLEDTEST6)
+
+#define __ARDUINO_SOFTWAREIIC_MINE____
+#include <Arduino.h>
+#include <SoftWire.h>         // 用于软件I2C
+#include <Adafruit_GFX.h>     // GFX 图形库
+#include <Adafruit_SSD1306.h> // SSD1306 OLED 驱动库
+
+// ----------------------------------------------------------------------------
+// 全局 Adafruit_SSD1306 对象 和 软件 I2C 引脚定义
+// ----------------------------------------------------------------------------
+#define SW_I2C_PIN_SDA 7     // 软件I2C SDA 引脚
+#define SW_I2C_PIN_SCL 6     // 软件I2C SCL 引脚
+#define OLED_PIN_RST_ADA -1  // Adafruit 库中，如果不使用复位引脚，则设为 -1
+
+// 软件I2C对象 (SDA, SCL)
+// SoftWire 构造函数的参数顺序可能因库的实现而异。
+// 通常是 (SDA, SCL)。
+SoftWire swI2C(SW_I2C_PIN_SDA, SW_I2C_PIN_SCL);
+
+
+
+// ----------------------------------------------------------------------------
+// 时钟参数 (与原始代码一致)
+// ----------------------------------------------------------------------------
+const int SCREEN_WIDTH = 128;
+const int SCREEN_HEIGHT = 64;
+const int CLOCK_CENTER_X = SCREEN_WIDTH / 2 - 1;
+const int CLOCK_CENTER_Y = SCREEN_HEIGHT / 2 - 1;
+const int CLOCK_RADIUS = SCREEN_HEIGHT / 2 - 4;
+
+const int HOUR_HAND_LENGTH = CLOCK_RADIUS * 0.55;
+const int MINUTE_HAND_LENGTH = CLOCK_RADIUS * 0.75;
+const int SECOND_HAND_LENGTH = CLOCK_RADIUS * 0.85;
+
+unsigned long previousMillis = 0;
+int currentHours = 10;
+int currentMinutes = 10;
+int currentSeconds = 30;
+
+
+// Adafruit_SSD1306 对象
+// 屏幕尺寸为 128x64
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &swI2C, OLED_PIN_RST_ADA);
+
+// --- 用于存储预计算数据的全局数组 (与原始代码一致) ---
+struct TickData {
+    uint8_t x1, y1, x2, y2;
+};
+TickData major_tick_coords[4]; // 主要刻度 (3, 6, 9, 12点)
+TickData minor_tick_coords[8]; // 其他次要刻度
+
+struct NumberData {
+    uint8_t x, y;
+    char str[3]; // "12" 需要3个字符 (包括'\0')
+};
+NumberData hour_numbers_data[12]; // 1点到12点的数字
+
+// ----------------------------------------------------------------------------
+// 在setup中调用一次，预计算表盘静态元素 (已为Adafruit GFX调整)
+// ----------------------------------------------------------------------------
+void precalculateClockFaceData() {
+    display.setTextSize(1);     // Adafruit GFX 默认字体大小 (高度8像素)
+    display.setTextColor(SSD1306_WHITE); // 设置文本颜色为白色
+
+    // Adafruit GFX 默认字体（大小为1）的高度约为8像素。
+    // 这与原始的 u8g2_font_u8glib_4_tf（高度约4像素）不同。
+    // int textHeightApprox = 8; // Adafruit GFX 字体大小为1时的大致高度
+    int numDisplayRadius = CLOCK_RADIUS - 7;
+    
+    int major_idx = 0;
+    int minor_idx = 0;
+
+    for (int i = 1; i <= 12; ++i) {
+        float angleDeg = (i * 30.0f) - 90.0f; // 使12点方向朝上
+        float angleRad = angleDeg * DEG_TO_RAD;
+
+        // 预计算刻度线坐标
+        if (i % 3 == 0) { // 主要刻度 (3, 6, 9, 12点)
+            major_tick_coords[major_idx].x1 = round(CLOCK_CENTER_X + (CLOCK_RADIUS - 5) * cos(angleRad));
+            major_tick_coords[major_idx].y1 = round(CLOCK_CENTER_Y + (CLOCK_RADIUS - 5) * sin(angleRad));
+            major_tick_coords[major_idx].x2 = round(CLOCK_CENTER_X + (CLOCK_RADIUS - 1) * cos(angleRad));
+            major_tick_coords[major_idx].y2 = round(CLOCK_CENTER_Y + (CLOCK_RADIUS - 1) * sin(angleRad));
+            major_idx++;
+        } else { // 次要刻度
+            minor_tick_coords[minor_idx].x1 = round(CLOCK_CENTER_X + (CLOCK_RADIUS - 3) * cos(angleRad));
+            minor_tick_coords[minor_idx].y1 = round(CLOCK_CENTER_Y + (CLOCK_RADIUS - 3) * sin(angleRad));
+            minor_tick_coords[minor_idx].x2 = round(CLOCK_CENTER_X + (CLOCK_RADIUS - 1) * cos(angleRad));
+            minor_tick_coords[minor_idx].y2 = round(CLOCK_CENTER_Y + (CLOCK_RADIUS - 1) * sin(angleRad));
+            minor_idx++;
+        }
+
+        // 预计算小时数字及其位置
+        itoa(i, hour_numbers_data[i-1].str, 10); // 将数字 1-12 存入 str
+        
+        int16_t x_b, y_b;    // getTextBounds 使用的临时变量
+        uint16_t w_b, h_b;  // getTextBounds 使用的临时变量
+        // 需要为 getTextBounds 设置一个临时的光标位置，尽管 x,y 不影响给定字符串的 w,h
+        display.getTextBounds(hour_numbers_data[i-1].str, 0, 0, &x_b, &y_b, &w_b, &h_b);
+        int strWidth = w_b;
+        int actualTextHeight = h_b; // 文本的实际高度
+
+        int numX_center = round(CLOCK_CENTER_X + numDisplayRadius * cos(angleRad));
+        int numY_center = round(CLOCK_CENTER_Y + numDisplayRadius * sin(angleRad));
+
+        // 在 Adafruit GFX 中，setCursor(x,y) 指定文本的左上角坐标。
+        // 将文本在 numX_center, numY_center 处居中对齐的计算：
+        hour_numbers_data[i-1].x = numX_center - (strWidth / 2);
+        hour_numbers_data[i-1].y = numY_center - (actualTextHeight / 2); // 使文本垂直居中
+    }
+}
+
+// ----------------------------------------------------------------------------
+// 内部辅助函数：绘制表盘元素 (使用预计算数据, 已为Adafruit GFX调整)
+// ----------------------------------------------------------------------------
+void drawClockFaceElements() {
+    // 1. 绘制表盘外圈
+    display.drawCircle(CLOCK_CENTER_X, CLOCK_CENTER_Y, CLOCK_RADIUS, SSD1306_WHITE);
+    display.drawCircle(CLOCK_CENTER_X, CLOCK_CENTER_Y, CLOCK_RADIUS - 1, SSD1306_WHITE); // 使线条看起来粗一点
+
+    // 2. 绘制预计算的小时刻度和数字
+    display.setTextSize(1); // 确保字体大小正确
+    display.setTextColor(SSD1306_WHITE);
+
+    // 绘制主要刻度
+    for (int k = 0; k < 4; ++k) {
+        display.drawLine(major_tick_coords[k].x1, major_tick_coords[k].y1, 
+                         major_tick_coords[k].x2, major_tick_coords[k].y2, SSD1306_WHITE);
+    }
+    // 绘制次要刻度
+    for (int k = 0; k < 8; ++k) {
+        display.drawLine(minor_tick_coords[k].x1, minor_tick_coords[k].y1, 
+                         minor_tick_coords[k].x2, minor_tick_coords[k].y2, SSD1306_WHITE);
+    }
+
+    // 绘制小时数字
+    for (int k = 0; k < 12; ++k) {
+        display.setCursor(hour_numbers_data[k].x, hour_numbers_data[k].y);
+        display.print(hour_numbers_data[k].str);
+    }
+
+    // 3. 绘制更突出的中心圆点
+    display.fillCircle(CLOCK_CENTER_X, CLOCK_CENTER_Y, 3, SSD1306_WHITE);
+    display.drawCircle(CLOCK_CENTER_X, CLOCK_CENTER_Y, 1, SSD1306_WHITE); // 参照原始代码效果
+}
+
+// ----------------------------------------------------------------------------
+// 内部辅助函数：绘制时钟指针 (此函数仍然需要动态计算, 已为Adafruit GFX调整)
+// ----------------------------------------------------------------------------
+void drawClockHands(int h, int m, int s) {
+    float angleRad;
+
+    // 将 h (0-23 小时制) 转换为 1-12 小时制用于显示
+    h = h % 12;
+    if (h == 0) { h = 12; } // 0点 和 12点 都显示为 "12"
+
+    // 时针
+    // h (1-12), m (0-59), s (0-59)
+    float hourAngleDeg = ((h + m / 60.0f + s / 3600.0f) * 30.0f) - 90.0f; // 角度从3点钟方向开始，减90度使12点朝上
+    angleRad = hourAngleDeg * DEG_TO_RAD;
+    int hourHandX = CLOCK_CENTER_X + HOUR_HAND_LENGTH * cos(angleRad);
+    int hourHandY = CLOCK_CENTER_Y + HOUR_HAND_LENGTH * sin(angleRad);
+    display.drawLine(CLOCK_CENTER_X, CLOCK_CENTER_Y, hourHandX, hourHandY, SSD1306_WHITE);
+
+    // 分针
+    float minuteAngleDeg = ((m + s / 60.0f) * 6.0f) - 90.0f;
+    angleRad = minuteAngleDeg * DEG_TO_RAD;
+    int minuteHandX = CLOCK_CENTER_X + MINUTE_HAND_LENGTH * cos(angleRad);
+    int minuteHandY = CLOCK_CENTER_Y + MINUTE_HAND_LENGTH * sin(angleRad);
+    display.drawLine(CLOCK_CENTER_X, CLOCK_CENTER_Y, minuteHandX, minuteHandY, SSD1306_WHITE);
+
+    // 秒针
+    float secondAngleDeg = (s * 6.0f) - 90.0f;
+    angleRad = secondAngleDeg * DEG_TO_RAD;
+    int secondHandX = CLOCK_CENTER_X + SECOND_HAND_LENGTH * cos(angleRad);
+    int secondHandY = CLOCK_CENTER_Y + SECOND_HAND_LENGTH * sin(angleRad);
+    display.drawLine(CLOCK_CENTER_X, CLOCK_CENTER_Y, secondHandX, secondHandY, SSD1306_WHITE);
+}
+
+// ============================================================================
+// OLED 初始化 (Adafruit GFX用)
+// ============================================================================
+void AdafruitOLED_Init() {
+    // SSD1306_SWITCHCAPVCC 表示使用内部电荷泵（升压电路）
+    // I2C 地址通常是 0x3C 或 0x3D。请根据您的OLED模块进行调整。
+    if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { 
+        // Serial.println(F("SSD1306 allocation failed")); // 初始化失败时的调试信息
+        for(;;); // 如果失败，则在此无限循环
+    }
+    display.clearDisplay();    // 清空显示缓冲区
+    // display.display();      // （可选）将清空后的内容立即显示到屏幕
+
+    precalculateClockFaceData(); // 预计算表盘数据
+}
+
+// ============================================================================
+// 显示时钟 (主绘图函数, Adafruit GFX用)
+// ============================================================================
+void displayClock(int hours, int minutes, int seconds) {
+    display.clearDisplay(); // 每次绘图前清空缓冲区
+
+    drawClockFaceElements(); // 绘制表盘的静态元素
+    drawClockHands(hours, minutes, seconds); // 绘制时钟指针
+
+    display.display(); // 将缓冲区的内容发送到OLED屏幕并显示
+}
+
+// ----------------------------------------------------------------------------
+// Arduino Setup
+// ----------------------------------------------------------------------------
+void setup(void) {
+    // Serial.begin(9600); // （可选）开启串口通讯用于调试
+    AdafruitOLED_Init();
+}
+
+// ----------------------------------------------------------------------------
+// Arduino Loop (时间更新逻辑与原始代码一致)
+// ----------------------------------------------------------------------------
+void loop(void) {
+    unsigned long currentMillis = millis();
+    static bool oledNeedsRedraw = true; // 初始时强制重绘
+
+    if (currentMillis - previousMillis >= 1000) {
+        previousMillis += 1000; // 为了保持1秒间隔的准确性，应调整 previousMillis
+
+        currentSeconds++;
+        oledNeedsRedraw = true; // 时间已更新，需要重绘
+        if (currentSeconds >= 60) {
+            currentSeconds = 0;
+            currentMinutes++;
+            if (currentMinutes >= 60) {
+                currentMinutes = 0;
+                currentHours++;
+                if (currentHours >= 24) { // 小时数从0到23
+                    currentHours = 0;
+                }
+            }
+        }
+    }
+
+    if (oledNeedsRedraw) {
+        // unsigned long drawStart = micros(); // （可选）用于性能分析：记录绘制开始时间
+        displayClock(currentHours, currentMinutes, currentSeconds);
+        // unsigned long drawDuration = micros() - drawStart; // （可选）计算绘制时长
+        // if (Serial) { Serial.print("Draw duration (us): "); Serial.println(drawDuration); } // （可选）通过串口输出绘制时长
+        oledNeedsRedraw = false; // 重绘完成
+    }
+}
+#endif
 
 #if defined(OLEDLCD)
 #include <Arduino.h>
@@ -3367,7 +3849,7 @@ DS1302 rtc(DS1302_CE_PIN, DS1302_IO_PIN, DS1302_SCLK_PIN);
 // 从 U8G2_SSD1306_128X64_NONAME_F_SW_I2C (全缓冲)
 // 改为 U8G2_SSD1306_128X64_NONAME_1_SW_I2C (页缓冲, 1/8屏幕高度的RAM)
 // 这将显著减少RAM使用量。_2_SW_I2C 使用两倍于_1_的RAM，但可能稍快。
-U8G2_SSD1306_128X64_NONAME_F_SW_I2C u8g2( // <--- 主要修改点在这里
+U8G2_SSD1306_128X64_NONAME_2_SW_I2C u8g2( // <--- 主要修改点在这里
     U8G2_R0,            // 旋转: 无旋转
     SW_I2C_PIN_SCL,     // SCL 引脚
     SW_I2C_PIN_SDA,     // SDA 引脚
@@ -3548,19 +4030,6 @@ void setup() {
 }
 
 void loop() {
-    unsigned long currentMillis = millis();
-    static bool oledNeedsRedraw = true; // 初始强制绘制一次
-    static unsigned long lastOledUpdateMillis = 0;
-    if (oledNeedsRedraw) {
-        displayOLEDClock(currentTime.hour, currentTime.minute, currentTime.second); // OLED显示时钟
-        oledNeedsRedraw = false;
-    }
-    if(currentMillis - lastOledUpdateMillis >= 1000) {
-        lastOledUpdateMillis = currentMillis;
-        oledNeedsRedraw = true; // 每秒强制重绘
-    }
-
-
     if (currentMode == SystemMode::NORMAL) {
         handleNormalMode();
     } else if (currentMode == SystemMode::SET_TIME) {
@@ -3577,6 +4046,20 @@ void loop() {
 
     if (clock_alarm_active) { // 如果时间闹钟正在响，持续处理
         handleActiveClockAlarmSound();
+    }
+    unsigned long currentMillis = millis();
+    static bool oledNeedsRedraw = true; // 初始强制绘制一次
+    static unsigned long lastOledUpdateMillis = 0;
+    if (oledNeedsRedraw && (currentMode == SystemMode::NORMAL)) {
+        #ifdef __Serial_DEBUG__
+        Serial.print("OLED Redraw: ");
+        #endif
+        displayOLEDClock(currentTime.hour, currentTime.minute, currentTime.second); // OLED显示时钟
+        oledNeedsRedraw = false;
+    }
+    if(currentMillis - lastOledUpdateMillis >= 1000) {
+        lastOledUpdateMillis = currentMillis;
+        oledNeedsRedraw = true; // 每秒强制重绘
     }
     
     // handleKalmanSerialConfig(); // 任何模式下都可以调整卡尔曼参数 删除此功能以减少RAM占用，增加此函数RAM会溢出
@@ -3700,7 +4183,7 @@ void displaySetTimeScreen(const DateTime& tempTime, int step) {
     if (settingStep == 5) lcd.print(">"); else lcd.print(" "); formatNumber(1, 0, tempTime.year, 4); 
     lcd.setCursor(5,0);
     if (settingStep == 4) lcd.print(">"); else lcd.print("-"); formatNumber(6, 0, tempTime.month, 2);  
-    lcd.setCursor(9,0);
+    lcd.setCursor(8,0);
     if (settingStep == 3) lcd.print(">"); else lcd.print("-"); formatNumber(9,0, tempTime.day, 2); 
     lcd.setCursor(13,0);
     lcd.print("Set");
@@ -3716,11 +4199,12 @@ void displaySetTimeScreen(const DateTime& tempTime, int step) {
 
 #define LCD_LASTLINE 15 // LCD最后一行的列数
 void displayStopwatchScreen(unsigned long elapsed_ms, bool is_running) {
+    
     unsigned long total_seconds = elapsed_ms / 1000;
     unsigned long disp_hours = total_seconds / 3600;
     unsigned long disp_minutes = (total_seconds % 3600) / 60;
     unsigned long disp_seconds = total_seconds % 60;
-    unsigned long disp_tenths = (elapsed_ms % 1000) / 100; // 取十分之一秒
+    unsigned long disp_tenths = (elapsed_ms % 1000) / 10; // 取十分之一秒
 
     // 第一行: 状态提示
     lcd.setCursor(0, 0);
@@ -3755,7 +4239,7 @@ void displayStopwatchScreen(unsigned long elapsed_ms, bool is_running) {
         lcd.print(":");
         formatNumber(3, 1, disp_seconds, 2);
         lcd.print(".");
-        lcd.print(disp_tenths); // 显示十分之一秒
+        formatNumber(6, 1, disp_tenths, 2); // 显示十分之一秒
         lcd.print("          "); // 清理后面，确保覆盖 HH:MM:SS 格式
     }
 }
@@ -3965,7 +4449,7 @@ void handleNormalMode() {
     checkAndTriggerClockAlarm();
     checkAndTriggerTemperatureAlarm();
 
-    if (checkButtonPress(BUTTON_CHOOSE_PIN, button_last_press_time_choose, BUTTON_DEBOUNCE_DELAY * 2)) {
+    if (checkButtonPress(BUTTON_CHOOSE_PIN, button_last_press_time_choose, BUTTON_DEBOUNCE_DELAY)) {
         enterTimeSettingMode();
         return;
     }
@@ -4108,7 +4592,7 @@ void handleTimeSettingMode() {
         return;
     }
 
-    if (checkButtonPress(BUTTON_CHOOSE_PIN, button_last_press_time_choose, BUTTON_DEBOUNCE_DELAY * 2)) {
+    if (checkButtonPress(BUTTON_CHOOSE_PIN, button_last_press_time_choose, BUTTON_DEBOUNCE_DELAY )) {
         setting_mode_entry_time = millis(); 
         settingStep++;
         if (settingStep > 5) { 
@@ -4320,7 +4804,7 @@ void handleStopwatchMode() {
     // ADD (短按/单击): Lap (暂不实现，过于复杂) / Reset (当停止或暂停时)
     // MINUS (长按或其他组合): Exit to NORMAL mode
 
-    if (checkButtonPress(BUTTON_CHOOSE_PIN, button_last_press_time_choose, BUTTON_DEBOUNCE_DELAY * 2)) {
+    if (checkButtonPress(BUTTON_CHOOSE_PIN, button_last_press_time_choose, BUTTON_DEBOUNCE_DELAY )) {
         setting_mode_entry_time = current_millis; // 重置不活动超时
         if (stopwatch_running) { // 正在运行 -> 暂停
             stopwatch_running = false;
@@ -4332,7 +4816,7 @@ void handleStopwatchMode() {
     }
 
     // ADD 按钮: 在暂停或停止状态下按ADD键重置秒表
-    if (!stopwatch_running && checkButtonPress(BUTTON_ADD_PIN, button_last_press_time_add, BUTTON_DEBOUNCE_DELAY * 2)) {
+    if (!stopwatch_running && checkButtonPress(BUTTON_ADD_PIN, button_last_press_time_add, BUTTON_DEBOUNCE_DELAY )) {
         setting_mode_entry_time = current_millis;
         stopwatch_elapsed_at_pause = 0; // 完全重置
         stopwatch_start_millis = 0;     // 确保下次开始时从0计时
@@ -4360,6 +4844,10 @@ void handleStopwatchMode() {
         lcd.clear();
         lcd.setCursor(0,0); lcd.print("Quit Timer MODE!"); delay(500); 
         exitSettingModeAndSave(false, false); // 退出设置模式
+        #ifdef __Serial_DEBUG__
+        Serial.println("Quit Stopwatch Mode");
+        #endif
+        return; // 退出 handleStopwatchMode
     }
 
     // 计算要显示的时间
@@ -4369,55 +4857,8 @@ void handleStopwatchMode() {
         display_elapsed_ms = stopwatch_elapsed_at_pause;
     }
 
-    // 调用显示函数 (需要在 display.cpp 中实现)
     displayStopwatchScreen(display_elapsed_ms, stopwatch_running);
-    // 示例显示逻辑 (应在 displayStopwatchScreen 中实现)
-    unsigned long total_seconds = display_elapsed_ms / 1000;
-    unsigned long disp_hours = total_seconds / 3600;
-    unsigned long disp_minutes = (total_seconds % 3600) / 60;
-    unsigned long disp_seconds = total_seconds % 60;
-    unsigned long disp_tenths = (display_elapsed_ms % 1000) / 100;
-
-    lcd.setCursor(0, 0);
-    if (stopwatch_running) {
-        lcd.print("Timing: RUNNING");
-#ifdef __Serial_DEBUG__
-        Serial.print("Timing: RUNNING");
-        Serial.println(display_elapsed_ms);
-#endif
-    }
-    else if (stopwatch_elapsed_at_pause > 0) {
-        lcd.print("Timing: PAUSED");
-#ifdef __Serial_DEBUG__
-        Serial.print("Timing: PAUSED ");
-        Serial.println(display_elapsed_ms);
-#endif
-    }
-    else {
-        lcd.print("Timing: READY ");
-#ifdef __Serial_DEBUG__
-        Serial.print("Timing: READY ");
-        Serial.println(display_elapsed_ms);
-#endif
-    }
-        
-
-    lcd.setCursor(0, 1);
-    if (disp_hours > 0) {
-        formatNumber(0, 1, disp_hours, 2); lcd.print(":");
-        formatNumber(3, 1, disp_minutes, 2); lcd.print(":");
-        formatNumber(6, 1, disp_seconds, 2); lcd.print("   "); // HH:MM:SS
-    } else {
-        formatNumber(0, 1, disp_minutes, 2); lcd.print(":"); // MM:SS.T
-        formatNumber(3, 1, disp_seconds, 2); lcd.print(".");
-        lcd.print(disp_tenths); lcd.print("  ");
-    }
-    // 在第二行显示操作提示，例如 "CH:S/P ADD:Rst"
-    lcd.setCursor(7,0); // 清除之前可能存在的提示
-    lcd.print("        "); // 清除提示
-    lcd.setCursor(7,0);
-    if(stopwatch_running) lcd.print("CH:Pa"); else lcd.print("CH:Go");
-    if(!stopwatch_running) {lcd.setCursor(13,0); lcd.print("A:R");}
+    
 
 
 }
@@ -4437,7 +4878,7 @@ void handleCountdownSetMode() {
 
     bool needs_redraw = false;
 
-    if (checkButtonPress(BUTTON_CHOOSE_PIN, button_last_press_time_choose, BUTTON_DEBOUNCE_DELAY * 2)) {
+    if (checkButtonPress(BUTTON_CHOOSE_PIN, button_last_press_time_choose, BUTTON_DEBOUNCE_DELAY )) {
         setting_mode_entry_time = millis();
         countdown_setting_step++;
         if (countdown_setting_step > 2) { // H, M, S 都设置过了
@@ -4579,7 +5020,7 @@ void handleCountdownRunningMode()
     }
 
     // --- 按键处理 ---
-    if (checkButtonPress(BUTTON_CHOOSE_PIN, button_last_press_time_choose, BUTTON_DEBOUNCE_DELAY * 2))
+    if (checkButtonPress(BUTTON_CHOOSE_PIN, button_last_press_time_choose, BUTTON_DEBOUNCE_DELAY ))
     {
         if (countdown_beeping)
         {
@@ -4617,7 +5058,7 @@ void handleCountdownRunningMode()
     }
 
     // MINUS 按钮 (短按或长按): 停止并返回设置模式
-    if (checkButtonPress(BUTTON_MINUS_PIN, button_last_press_time_minus, BUTTON_DEBOUNCE_DELAY * 2))
+    if (checkButtonPress(BUTTON_MINUS_PIN, button_last_press_time_minus, BUTTON_DEBOUNCE_DELAY ))
     {
         countdown_running = false;
         countdown_beeping = false;
@@ -4668,7 +5109,7 @@ void handleAlarmSettingMode() {
     }
     bool needs_redraw = false;
 
-    if (checkButtonPress(BUTTON_CHOOSE_PIN, button_last_press_time_choose, BUTTON_DEBOUNCE_DELAY * 2)) {
+    if (checkButtonPress(BUTTON_CHOOSE_PIN, button_last_press_time_choose, BUTTON_DEBOUNCE_DELAY )) {
         setting_mode_entry_time = millis();
         settingStep++;
         if (settingStep > 2) { 
@@ -4736,7 +5177,7 @@ void handleActiveClockAlarmSound() {
         digitalRead(BUTTON_ADD_PIN) == LOW ||
         digitalRead(BUTTON_MINUS_PIN) == LOW) {
         stopClockAlarmSound();
-        delay(BUTTON_DEBOUNCE_DELAY * 2); 
+        delay(BUTTON_DEBOUNCE_DELAY ); 
         return;
     }
 
@@ -4763,7 +5204,7 @@ void checkAndTriggerTemperatureAlarm() {
 
     if (currentTemperature_filtered >= temperatureAlarmThreshold) {
         unsigned long current_millis = millis();
-        if (current_millis - temp_alarm_last_beep_time > TEMP_ALARM_DURATION * 10) { 
+        if (current_millis - temp_alarm_last_beep_time > TEMP_ALARM_DURATION * 2) { 
             tone(BUZZER_TONE_PIN, ALARM_SOUND_FREQ, TEMP_ALARM_DURATION);
             temp_alarm_last_beep_time = current_millis;
         }
@@ -4857,4 +5298,5 @@ bool checkButtonHeld(int pin, unsigned long& lastActionTime, unsigned long actio
     }
     return false;
 }
+#endif
 #endif

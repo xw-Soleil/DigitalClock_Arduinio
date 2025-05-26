@@ -11,8 +11,8 @@
 #define __KalmanConfig___ // 定义卡尔曼滤波器配置模式，不启用用串口输出
 #define __MEMORY_EFFICIENT__ // 定义高效格式化模式，使用更少的RAM
 #define MUSIC_PLAY
-#define __KalmanOUTPUT__ // 定义卡尔曼滤波器输出模式，启用串口输出
-#define __PLAYGAMES_ // 定义游戏模式
+#define __KalmanOUTPUT_ // 定义卡尔曼滤波器输出模式，启用串口输出
+#define __PLAYGAMES__ // 定义游戏模式
 // LCD 初始化
 LiquidCrystal lcd(LCD_RS_PIN, LCD_EN_PIN, LCD_D4_PIN, LCD_D5_PIN, LCD_D6_PIN, LCD_D7_PIN);
 
@@ -413,6 +413,7 @@ void game_loop(bool jumpButtonPressed) {
             lcd.clear(); // 清屏
             lcd.setCursor(0, 0); // 根据屏幕布局调整
             lcd.print("Press Add toPlay"); // 假设BUTTON_ADD_PIN是跳跃/开始键
+            delay(500); // 闪烁间隔
         }
         game_blink = !game_blink;
         
@@ -553,10 +554,17 @@ void loop() {
             gameInitialized = true;
         }
         static bool jumpButtonPressed = false; // 按钮状态
-        if (checkButtonPress(BUTTON_ADD_PIN, button_last_press_time_add, 200)) { // 检测跳跃按钮
+        // if (checkButtonPress(BUTTON_ADD_PIN, button_last_press_time_add, 200)) { // 检测跳跃按钮
+        //     jumpButtonPressed = true;
+        // } else {
+        //     jumpButtonPressed = false;
+        // }
+        if(digitalRead(BUTTON_ADD_PIN) == LOW) { // 检测跳跃按钮
             jumpButtonPressed = true;
+            delay(50); // 简单的防抖延时
         } else {
             jumpButtonPressed = false;
+            delay(50); // 简单的防抖延时
         }
         game_loop(jumpButtonPressed); // 调用游戏循环
 
@@ -1027,15 +1035,6 @@ void handleNormalMode() {
         enterCountdownSetMode();
         return;
     }
-
-#ifdef __PLAYGAMES__
-        //两个按键一起按下短按进入游戏模式
-    if(checkMultiButtonPress(BUTTON_CHOOSE_PIN, BUTTON_MINUS_PIN, button_last_press_time_choose_add, BUTTON_DEBOUNCE_DELAY)) {
-        currentMode = SystemMode::PLAY_MODE; // 进入游戏模式
-        lcd.clear(); // 清屏
-        return;
-    }
-#endif
 
     static unsigned long combo_press_start_time = 0;
     bool add_low = (digitalRead(BUTTON_ADD_PIN) == LOW);
@@ -1857,13 +1856,35 @@ void handleAlarmSettingMode() {
         needs_redraw = true;
     }
 
-    if (checkButtonHeld(BUTTON_ADD_PIN, button_last_press_time_add, BUTTON_DEBOUNCE_DELAY)) {
-        setting_mode_entry_time = millis(); needs_redraw = true;
-        switch (settingStep) {
-            case 0: tempSettingAlarmHour = (tempSettingAlarmHour + 1) % 24; break;
-            case 1: tempSettingAlarmMinute = (tempSettingAlarmMinute + 1) % 60; break;
-            case 2: tempSettingAlarmTemp += 1.0f; if (tempSettingAlarmTemp > 99.0f) tempSettingAlarmTemp = 99.0f; break;
-            case 3: currentMusicMode = (currentMusicMode == MusicMode::NORMAL) ? MusicMode::MUSIC : MusicMode::NORMAL; break;
+    if (checkButtonHeld(BUTTON_ADD_PIN, button_last_press_time_add, BUTTON_DEBOUNCE_DELAY))
+    {
+        setting_mode_entry_time = millis();
+        needs_redraw = true;
+        switch (settingStep)
+        {
+        case 0:
+            tempSettingAlarmHour = (tempSettingAlarmHour + 1) % 24;
+            break;
+        case 1:
+            tempSettingAlarmMinute = (tempSettingAlarmMinute + 1) % 60;
+            break;
+        case 2:
+            tempSettingAlarmTemp += 1.0f;
+            if (tempSettingAlarmTemp > 99.0f)
+                tempSettingAlarmTemp = 99.0f;
+            break;
+        case 3:
+            currentMusicMode = (currentMusicMode == MusicMode::NORMAL) ? MusicMode::MUSIC : MusicMode::NORMAL;
+#ifdef __PLAYGAMES__
+            // 两个按键一起按下短按进入游戏模式
+            if (checkMultiButtonPress(BUTTON_MINUS_PIN, BUTTON_ADD_PIN, button_last_press_time_choose_add, BUTTON_DEBOUNCE_DELAY))
+            {
+                currentMode = SystemMode::PLAY_MODE; // 进入游戏模式
+                lcd.clear();                         // 清屏
+                return;
+            }
+#endif
+            break;
         }
     }
 
@@ -1879,6 +1900,7 @@ void handleAlarmSettingMode() {
     if (needs_redraw) {
         displaySetAlarmScreen(tempSettingAlarmHour, tempSettingAlarmMinute, tempSettingAlarmTemp, settingStep);
     }
+    
 }
 
 

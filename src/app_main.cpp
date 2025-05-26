@@ -12,6 +12,7 @@
 #define __MEMORY_EFFICIENT__ // 定义高效格式化模式，使用更少的RAM
 #define MUSIC_PLAY
 #define __KalmanOUTPUT__ // 定义卡尔曼滤波器输出模式，启用串口输出
+#define __PLAYGAMES_ // 定义游戏模式
 // LCD 初始化
 LiquidCrystal lcd(LCD_RS_PIN, LCD_EN_PIN, LCD_D4_PIN, LCD_D5_PIN, LCD_D6_PIN, LCD_D7_PIN);
 
@@ -24,12 +25,21 @@ DS1302 rtc(DS1302_CE_PIN, DS1302_IO_PIN, DS1302_SCLK_PIN);
 // 从 U8G2_SSD1306_128X64_NONAME_F_SW_I2C (全缓冲)
 // 改为 U8G2_SSD1306_128X64_NONAME_1_SW_I2C (页缓冲, 1/8屏幕高度的RAM)
 // 这将显著减少RAM使用量。_2_SW_I2C 使用两倍于_1_的RAM，但可能稍快。
+#ifndef __PLAYGAMES__ // 游戏模式下不使用OLED
 U8G2_SSD1306_128X64_NONAME_2_SW_I2C u8g2( // <--- 主要修改点在这里
     U8G2_R0,            // 旋转: 无旋转
     SW_I2C_PIN_SCL,     // SCL 引脚
     SW_I2C_PIN_SDA,     // SDA 引脚
     OLED_PIN_RST        // Reset 引脚
 );
+#else
+U8G2_SSD1306_128X64_NONAME_1_SW_I2C u8g2( // <--- 主要修改点在这里
+    U8G2_R0,            // 旋转: 无旋转
+    SW_I2C_PIN_SCL,     // SCL 引脚
+    SW_I2C_PIN_SDA,     // SDA 引脚
+    OLED_PIN_RST        // Reset 引脚
+);
+#endif
 #endif
 // 时间日期结构体
 struct DateTime {
@@ -87,7 +97,7 @@ int alarm_minute = 13;
 float temperatureAlarmThreshold = DEFAULT_ALARM_TEMP;
 
 // 系统状态
-enum class SystemMode { NORMAL, SET_TIME, SET_ALARM, STOPWATCH, COUNTDOWN_SET, COUNTDOWN_RUNNING };
+enum class SystemMode { NORMAL, SET_TIME, SET_ALARM, STOPWATCH, COUNTDOWN_SET, COUNTDOWN_RUNNING,PLAY_MODE };
 SystemMode currentMode = SystemMode::NORMAL;
 int settingStep = 0; // 设置步骤 (例如：0-小时, 1-分钟 ...)
 
@@ -97,12 +107,13 @@ float currentTemperature_filtered = 0.0f;
 // 卡尔曼滤波器参数
 float kalman_x_hat = 0;
 float kalman_P = 1.0;
-float kalman_Q = 0.0001; // 过程噪声协方差 - 可调
+float kalman_Q = 0.001; // 过程噪声协方差 - 可调
 float kalman_R = 0.09;   // 测量噪声协方差 - 可调
 
 // 非阻塞控制相关变量
 unsigned long button_last_press_time_choose = 0;
 unsigned long button_last_press_time_addminus = 0;
+unsigned long button_last_press_time_choose_add = 0;
 unsigned long button_last_press_time_add = 0;
 unsigned long button_last_press_time_add_long = 0;
 unsigned long button_last_press_time_minus_long = 0;
@@ -122,7 +133,7 @@ unsigned long stopwatch_start_millis; // 记录秒表开始或从暂停继续时
 unsigned long stopwatch_elapsed_at_pause; // 记录暂停时的已用时间
 
 // 倒计时器状态变量
-int countdown_set_hours;
+int countdown_set_hours = 0;
 int countdown_set_minutes;
 int countdown_set_seconds;
 unsigned long countdown_total_set_seconds; // 总设置的倒计时秒数
@@ -209,6 +220,274 @@ void playMusic(const int melody[], const int durations[], int songLength, float 
 #endif
 
 
+// --- 游戏模块代码开始 ---
+#ifdef __PLAYGAMES__ // 使用宏来控制游戏模块的编译
+
+// 游戏特定的引脚定义 (请确保这些引脚在您的项目中可用且不冲突)
+#define GAME_PIN_AUTOPLAY 1       // 游戏使用的自动播放引脚 (示例)
+// #define GAME_PIN_BUTTON 2      // 游戏原始按钮引脚，现在将使用 BUTTON_ADD_PIN
+// #define GAME_PIN_READWRITE 10  // 游戏原始LCD R/W引脚 (通常接地)
+// #define GAME_PIN_CONTRAST 12   // 游戏原始LCD对比度引脚 (通常使用电位器)
+
+
+// 游戏图形和逻辑的宏定义
+#define SPRITE_RUN1 1
+#define SPRITE_RUN2 2
+#define SPRITE_JUMP 3
+#define SPRITE_JUMP_UPPER '.'
+#define SPRITE_JUMP_LOWER 4
+#define SPRITE_TERRAIN_EMPTY ' '
+#define SPRITE_TERRAIN_SOLID 5
+#define SPRITE_TERRAIN_SOLID_RIGHT 6
+#define SPRITE_TERRAIN_SOLID_LEFT 7
+
+#define HERO_HORIZONTAL_POSITION 1
+
+#define TERRAIN_WIDTH 16
+#define TERRAIN_EMPTY_TYPE 0 // Renamed from TERRAIN_EMPTY to avoid conflict if TERRAIN_EMPTY is a char
+#define TERRAIN_LOWER_BLOCK_TYPE 1 // Renamed
+#define TERRAIN_UPPER_BLOCK_TYPE 2 // Renamed
+
+#define HERO_POSITION_OFF 0
+#define HERO_POSITION_RUN_LOWER_1 1
+#define HERO_POSITION_RUN_LOWER_2 2
+#define HERO_POSITION_JUMP_1 3
+#define HERO_POSITION_JUMP_2 4
+#define HERO_POSITION_JUMP_3 5
+#define HERO_POSITION_JUMP_4 6
+#define HERO_POSITION_JUMP_5 7
+#define HERO_POSITION_JUMP_6 8
+#define HERO_POSITION_JUMP_7 9
+#define HERO_POSITION_JUMP_8 10
+#define HERO_POSITION_RUN_UPPER_1 11
+#define HERO_POSITION_RUN_UPPER_2 12
+
+// 游戏状态变量 (设为static，使其作用域限制在文件内，或根据您的单文件结构调整)
+static char game_terrainUpper[TERRAIN_WIDTH + 1];
+static char game_terrainLower[TERRAIN_WIDTH + 1];
+// static bool game_buttonPushed = false; // 将被轮询替代
+
+static byte game_heroPos = HERO_POSITION_RUN_LOWER_1;
+static byte game_newTerrainType = TERRAIN_EMPTY_TYPE;
+static byte game_newTerrainDuration = 1;
+static bool game_playing = false;
+static bool game_blink = false;
+static unsigned int game_distance = 0;
+static unsigned long game_lastFrameTime = 0;
+const unsigned int game_frameDelay_playing = 100; // 游戏进行时的帧延迟
+const unsigned int game_frameDelay_menu = 250;    // 游戏菜单时的帧延迟
+
+extern LiquidCrystal lcd; // 假设您的lcd对象在main.ino中全局定义
+
+void game_initializeGraphics() {
+    static byte graphics[] = {
+        B01100, B01100, B00000, B01110, B11100, B01100, B11010, B10011, // Run1
+        B01100, B01100, B00000, B01100, B01100, B01100, B01100, B01110, // Run2
+        B01100, B01100, B00000, B11110, B01101, B11111, B10000, B00000, // Jump
+        B11110, B01101, B11111, B10000, B00000, B00000, B00000, B00000, // Jump lower
+        B11111, B11111, B11111, B11111, B11111, B11111, B11111, B11111, // Ground
+        B00011, B00011, B00011, B00011, B00011, B00011, B00011, B00011, // Ground right
+        B11000, B11000, B11000, B11000, B11000, B11000, B11000, B11000  // Ground left
+    };
+    for (int i = 0; i < 7; ++i) {
+        lcd.createChar(i + 1, &graphics[i * 8]);
+    }
+    for (int i = 0; i < TERRAIN_WIDTH; ++i) {
+        game_terrainUpper[i] = SPRITE_TERRAIN_EMPTY;
+        game_terrainLower[i] = SPRITE_TERRAIN_EMPTY;
+    }
+}
+
+void game_advanceTerrain(char* terrain, byte newTerrainBlockType) { // Renamed newTerrain
+    for (int i = 0; i < TERRAIN_WIDTH; ++i) {
+        char current = terrain[i];
+        char next = (i == TERRAIN_WIDTH - 1) ? newTerrainBlockType : terrain[i + 1]; // Use newTerrainBlockType here
+        switch (current) {
+            case SPRITE_TERRAIN_EMPTY:
+                terrain[i] = (next == SPRITE_TERRAIN_SOLID) ? SPRITE_TERRAIN_SOLID_RIGHT : SPRITE_TERRAIN_EMPTY;
+                break;
+            case SPRITE_TERRAIN_SOLID:
+                terrain[i] = (next == SPRITE_TERRAIN_EMPTY) ? SPRITE_TERRAIN_SOLID_LEFT : SPRITE_TERRAIN_SOLID;
+                break;
+            case SPRITE_TERRAIN_SOLID_RIGHT:
+                terrain[i] = SPRITE_TERRAIN_SOLID;
+                break;
+            case SPRITE_TERRAIN_SOLID_LEFT:
+                terrain[i] = SPRITE_TERRAIN_EMPTY;
+                break;
+        }
+    }
+}
+
+bool game_drawHeroAndCheckCollision(byte position, unsigned int score) {
+    bool collide = false;
+    char upperSave = game_terrainUpper[HERO_HORIZONTAL_POSITION];
+    char lowerSave = game_terrainLower[HERO_HORIZONTAL_POSITION];
+    byte upper_sprite_char, lower_sprite_char; // Renamed to avoid conflict
+
+    switch (position) {
+        case HERO_POSITION_OFF: upper_sprite_char = lower_sprite_char = SPRITE_TERRAIN_EMPTY; break;
+        case HERO_POSITION_RUN_LOWER_1: upper_sprite_char = SPRITE_TERRAIN_EMPTY; lower_sprite_char = SPRITE_RUN1; break;
+        case HERO_POSITION_RUN_LOWER_2: upper_sprite_char = SPRITE_TERRAIN_EMPTY; lower_sprite_char = SPRITE_RUN2; break;
+        case HERO_POSITION_JUMP_1: case HERO_POSITION_JUMP_8: upper_sprite_char = SPRITE_TERRAIN_EMPTY; lower_sprite_char = SPRITE_JUMP; break;
+        case HERO_POSITION_JUMP_2: case HERO_POSITION_JUMP_7: upper_sprite_char = SPRITE_JUMP_UPPER; lower_sprite_char = SPRITE_JUMP_LOWER; break;
+        case HERO_POSITION_JUMP_3: case HERO_POSITION_JUMP_4: case HERO_POSITION_JUMP_5: case HERO_POSITION_JUMP_6: upper_sprite_char = SPRITE_JUMP; lower_sprite_char = SPRITE_TERRAIN_EMPTY; break;
+        case HERO_POSITION_RUN_UPPER_1: upper_sprite_char = SPRITE_RUN1; lower_sprite_char = SPRITE_TERRAIN_EMPTY; break;
+        case HERO_POSITION_RUN_UPPER_2: upper_sprite_char = SPRITE_RUN2; lower_sprite_char = SPRITE_TERRAIN_EMPTY; break;
+        default: upper_sprite_char = lower_sprite_char = SPRITE_TERRAIN_EMPTY; // Should not happen
+    }
+
+    if (upper_sprite_char != ' ') {
+        game_terrainUpper[HERO_HORIZONTAL_POSITION] = upper_sprite_char;
+        collide = (upperSave != SPRITE_TERRAIN_EMPTY && upperSave != SPRITE_TERRAIN_SOLID_LEFT && upperSave != SPRITE_TERRAIN_SOLID_RIGHT); // Collision if hero char is on non-empty terrain
+    }
+    if (lower_sprite_char != ' ') {
+        game_terrainLower[HERO_HORIZONTAL_POSITION] = lower_sprite_char;
+        collide |= (lowerSave != SPRITE_TERRAIN_EMPTY && lowerSave != SPRITE_TERRAIN_SOLID_LEFT && lowerSave != SPRITE_TERRAIN_SOLID_RIGHT);
+    }
+    
+    byte digits = (score > 9999) ? 5 : (score > 999) ? 4 : (score > 99) ? 3 : (score > 9) ? 2 : 1;
+    
+    game_terrainUpper[TERRAIN_WIDTH] = '\0'; // Null terminate for lcd.print
+    game_terrainLower[TERRAIN_WIDTH] = '\0';
+    
+    char tempCharForScoreDisplay = game_terrainUpper[16 - digits]; // Save char under score
+    game_terrainUpper[16 - digits] = '\0'; // Temp null terminate for printing terrain before score
+    
+    lcd.setCursor(0, 0);
+    lcd.print(game_terrainUpper);
+    
+    game_terrainUpper[16 - digits] = tempCharForScoreDisplay; // Restore char
+    
+    lcd.setCursor(0, 1);
+    lcd.print(game_terrainLower);
+    
+    lcd.setCursor(16 - digits, 0);
+    lcd.print(score);
+
+    game_terrainUpper[HERO_HORIZONTAL_POSITION] = upperSave; // Restore original terrain char
+    game_terrainLower[HERO_HORIZONTAL_POSITION] = lowerSave;
+    return collide;
+}
+
+// 调用此函数来初始化游戏，例如当进入 PLAY_MODE 时
+void game_setup() {
+    // pinMode(GAME_PIN_READWRITE, OUTPUT); // 通常由 LiquidCrystal 处理或接地
+    // digitalWrite(GAME_PIN_READWRITE, LOW);
+    // pinMode(GAME_PIN_CONTRAST, OUTPUT); // 通常使用电位器
+    // digitalWrite(GAME_PIN_CONTRAST, LOW);
+
+    // 游戏按钮将通过主循环的按钮处理逻辑传递进来
+    // pinMode(GAME_PIN_BUTTON, INPUT_PULLUP); // 假设使用 BUTTON_ADD_PIN
+
+    pinMode(GAME_PIN_AUTOPLAY, OUTPUT);
+    digitalWrite(GAME_PIN_AUTOPLAY, HIGH); // 默认不自动播放
+
+    game_initializeGraphics(); // 创建自定义字符
+    
+    // lcd.begin(16, 2); // LCD应该已经在您的主setup()中初始化过了
+
+    // 重置游戏状态变量
+    game_heroPos = HERO_POSITION_RUN_LOWER_1;
+    game_newTerrainType = TERRAIN_EMPTY_TYPE;
+    game_newTerrainDuration = 1;
+    game_playing = false;
+    game_blink = false;
+    game_distance = 0;
+    lcd.clear(); // 清屏进入游戏
+}
+
+// 这个函数将在您的主 loop() 中 PLAY_MODE 状态下被调用
+// jumpButtonPressed 应该反映您选择的跳跃按钮是否被按下
+void game_loop(bool jumpButtonPressed) {
+    unsigned long currentTime = millis();
+
+    if (!game_playing) {
+        if (currentTime - game_lastFrameTime < game_frameDelay_menu) {
+            return; // 控制菜单帧率
+        }
+        game_lastFrameTime = currentTime;
+
+        game_drawHeroAndCheckCollision((game_blink) ? HERO_POSITION_OFF : game_heroPos, game_distance >> 3);
+        if (game_blink) {
+            lcd.clear(); // 清屏
+            lcd.setCursor(0, 0); // 根据屏幕布局调整
+            lcd.print("Press Add toPlay"); // 假设BUTTON_ADD_PIN是跳跃/开始键
+        }
+        game_blink = !game_blink;
+        
+        if (jumpButtonPressed) { // 使用传入的按钮状态
+            // game_initializeGraphics(); // 字符已创建，只需重置地形和位置
+            for (int i = 0; i < TERRAIN_WIDTH; ++i) {
+                game_terrainUpper[i] = SPRITE_TERRAIN_EMPTY;
+                game_terrainLower[i] = SPRITE_TERRAIN_EMPTY;
+            }
+            game_heroPos = HERO_POSITION_RUN_LOWER_1;
+            game_newTerrainType = TERRAIN_EMPTY_TYPE;
+            game_newTerrainDuration = 1;
+            game_playing = true;
+            game_distance = 0;
+            lcd.clear(); // 清屏开始游戏
+        }
+        return;
+    }
+
+    // --- 游戏进行中 ---
+    if (currentTime - game_lastFrameTime < game_frameDelay_playing) {
+        return; // 控制游戏帧率
+    }
+    game_lastFrameTime = currentTime;
+
+    // 根据新的地形块类型推进地形
+    game_advanceTerrain(game_terrainLower, (game_newTerrainType == TERRAIN_LOWER_BLOCK_TYPE) ? SPRITE_TERRAIN_SOLID : SPRITE_TERRAIN_EMPTY);
+    game_advanceTerrain(game_terrainUpper, (game_newTerrainType == TERRAIN_UPPER_BLOCK_TYPE) ? SPRITE_TERRAIN_SOLID : SPRITE_TERRAIN_EMPTY);
+    
+    if (--game_newTerrainDuration == 0) {
+        if (game_newTerrainType == TERRAIN_EMPTY_TYPE) {
+            game_newTerrainType = (random(3) == 0) ? TERRAIN_UPPER_BLOCK_TYPE : TERRAIN_LOWER_BLOCK_TYPE;
+            game_newTerrainDuration = 2 + random(10);
+        } else {
+            game_newTerrainType = TERRAIN_EMPTY_TYPE;
+            game_newTerrainDuration = 10 + random(10);
+        }
+    }
+        
+    if (jumpButtonPressed) {
+        if (game_heroPos <= HERO_POSITION_RUN_LOWER_2) game_heroPos = HERO_POSITION_JUMP_1;
+        // game_buttonPushed = false; // 已通过参数传递
+    }  
+
+    if (game_drawHeroAndCheckCollision(game_heroPos, game_distance >> 3)) {
+        game_playing = false; // 碰撞，游戏结束
+        // 可以在这里添加游戏结束的音效或显示
+        lcd.setCursor(0,1);
+        lcd.print(" Game Over! ");
+        delay(1000); // 短暂显示 Game Over
+    } else {
+        // 更新英雄位置/动画帧
+        if (game_heroPos == HERO_POSITION_RUN_LOWER_2 || game_heroPos == HERO_POSITION_JUMP_8) {
+            game_heroPos = HERO_POSITION_RUN_LOWER_1;
+        } else if ((game_heroPos >= HERO_POSITION_JUMP_3 && game_heroPos <= HERO_POSITION_JUMP_5) && game_terrainLower[HERO_HORIZONTAL_POSITION] != SPRITE_TERRAIN_EMPTY) {
+            // 如果在空中跳跃阶段，且下方有实体方块，则切换到上方跑道
+            game_heroPos = HERO_POSITION_RUN_UPPER_1;
+        } else if (game_heroPos >= HERO_POSITION_RUN_UPPER_1 && game_terrainLower[HERO_HORIZONTAL_POSITION] == SPRITE_TERRAIN_EMPTY) {
+            // 如果在上方跑道，且下方变为空，则开始下落 (回到跳跃序列的某个阶段)
+            game_heroPos = HERO_POSITION_JUMP_5; // 或者调整为一个合适的下落帧
+        } else if (game_heroPos == HERO_POSITION_RUN_UPPER_2) {
+            game_heroPos = HERO_POSITION_RUN_UPPER_1;
+        } else {
+            ++game_heroPos; // 推进跳跃动画或跑动动画
+        }
+        ++game_distance;
+        
+        // 自动播放逻辑 (如果需要)
+        // digitalWrite(GAME_PIN_AUTOPLAY, game_terrainLower[HERO_HORIZONTAL_POSITION + 2] == SPRITE_TERRAIN_EMPTY ? HIGH : LOW);
+    }
+}
+
+#endif // __PLAYGAMES__
+
+
 void setup() {
     pinMode(LCD_RS_PIN, OUTPUT);
     pinMode(LCD_EN_PIN, OUTPUT);
@@ -233,7 +512,7 @@ void setup() {
     Time t = rtc.getTime();
     // 检查RTC时间是否大致有效，如果无效则设置一个默认时间
     if ( t.mon < 1 || t.mon > 12 || t.date < 1 || t.date > 31) { // 更严格的年份下限
-        Serial.println("RTC not set or invalid. Setting default time (2025-01-01 12:00:00).");
+        // Serial.println("RTC not set or invalid. Setting default time (2025-01-01 12:00:00).");
         rtc.setTime(12, 0, 0);        // 12:00:00
         rtc.setDate(1,1,2025);      // 2025-Jan-01 DD,MM,YYYY for DS1302.h library
     }
@@ -265,6 +544,31 @@ void loop() {
     } else if (currentMode == SystemMode::COUNTDOWN_RUNNING) {
         handleCountdownRunningMode();
     }
+    #ifdef __PLAYGAMES__
+    else if (currentMode == SystemMode::PLAY_MODE) {
+        //判断是否是第一次进入以调用游戏初始化
+        static bool gameInitialized = false;
+        if (!gameInitialized) {
+            game_setup(); // 初始化游戏图形和状态
+            gameInitialized = true;
+        }
+        static bool jumpButtonPressed = false; // 按钮状态
+        if (checkButtonPress(BUTTON_ADD_PIN, button_last_press_time_add, 200)) { // 检测跳跃按钮
+            jumpButtonPressed = true;
+        } else {
+            jumpButtonPressed = false;
+        }
+        game_loop(jumpButtonPressed); // 调用游戏循环
+
+        // 检测是否需要退出游戏模式
+        if (checkButtonPress(BUTTON_CHOOSE_PIN, button_last_press_time_choose, 200)) {
+            currentMode = SystemMode::NORMAL; // 返回正常模式
+            gameInitialized = false; // 重置游戏初始化状态
+            lcd.clear(); // 清屏
+        }
+    }
+    #endif
+    
 
     if (clock_alarm_active) { // 如果时间闹钟正在响，持续处理
         handleActiveClockAlarmSound();
@@ -318,8 +622,8 @@ void calculateDayOfWeek(DateTime& dt) {
     int m = dt.month;
     int y = dt.year;
     int temp_m = m;
-    if (temp_m == 1) { temp_m = 13; }
-    if (temp_m == 2) { temp_m = 14; }
+    if (temp_m == 1) { temp_m = 13; y--; } // 1月和2月视为上一年的13月和14月
+    if (temp_m == 2) { temp_m = 14; y--; } // 2月视为上一年的14月
     dt.dayOfWeek = (d + 2 * temp_m + 3 * (temp_m + 1) / 5 + y + y / 4 - y / 100 + y / 400) % 7 + 1;
 }
 
@@ -441,7 +745,7 @@ void displaySetTimeScreen(const DateTime& tempTime, int step) {
     if (settingStep == 1) lcd.print(">"); else lcd.print(" "); formatNumber(5, 1, tempTime.minute, 2); lcd.print(":"); 
     lcd.setCursor(8,1);
     if (settingStep == 2) lcd.print(">"); else lcd.print(" "); formatNumber(9,1, tempTime.second, 2);
-    lcd.setCursor(13,1); lcd.print("Tim");
+    lcd.setCursor(13,1); lcd.print(getDayOfWeekString(tempTime.dayOfWeek)); // 显示星期
 }
 
 #define LCD_LASTLINE 15 // LCD最后一行的列数
@@ -723,6 +1027,15 @@ void handleNormalMode() {
         enterCountdownSetMode();
         return;
     }
+
+#ifdef __PLAYGAMES__
+        //两个按键一起按下短按进入游戏模式
+    if(checkMultiButtonPress(BUTTON_CHOOSE_PIN, BUTTON_MINUS_PIN, button_last_press_time_choose_add, BUTTON_DEBOUNCE_DELAY)) {
+        currentMode = SystemMode::PLAY_MODE; // 进入游戏模式
+        lcd.clear(); // 清屏
+        return;
+    }
+#endif
 
     static unsigned long combo_press_start_time = 0;
     bool add_low = (digitalRead(BUTTON_ADD_PIN) == LOW);
@@ -1207,7 +1520,8 @@ void handleTimeSettingMode() {
         if (tempSettingTime.day > max_days) {
             tempSettingTime.day = max_days;
         }
-        displaySetTimeScreen(tempSettingTime, settingStep); 
+        calculateDayOfWeek(tempSettingTime); // 确保日期正确
+        displaySetTimeScreen(tempSettingTime, settingStep);
     }
 }
 #endif
@@ -1360,6 +1674,7 @@ void handleCountdownSetMode() {
     }
 }
 
+volatile int firstInt = 1;
 void handleCountdownRunningMode()
 {
     unsigned long current_millis = millis();
@@ -1415,8 +1730,12 @@ void handleCountdownRunningMode()
         // 或者，我们用一个 countdown_remaining_at_pause_ms 变量
         // 这里我们让显示保持在暂停时的值，但需要确保这个值被正确获取
         // unsigned long paused_remaining_ms = countdown_target_millis - millis(); // 这是如果没暂停会剩余的时间
-        //                                                                         // 实际上，应该在暂停时记录剩余时间
-        display_remaining_s = countdown_total_set_seconds - ((millis() - (countdown_target_millis - countdown_total_set_seconds * 1000UL)) / 1000UL);
+        // 
+                                                                                // 实际上，应该在暂停时记录剩余时间
+        if(1){
+            display_remaining_s = countdown_total_set_seconds - ((millis() - (countdown_target_millis - countdown_total_set_seconds * 1000UL)) / 1000UL);
+            firstInt = 0; // 只在第一次调用时计算
+        }
         // 上述计算复杂，更简单的方式是在暂停时存下剩余秒数
         // 此处简化：假设我们有一个变量 `countdown_seconds_at_pause`
         // display_remaining_s = countdown_seconds_at_pause;
@@ -1487,31 +1806,33 @@ void handleCountdownRunningMode()
     // --- 显示 ---
     // displayCountdownRunningScreen(display_remaining_s, countdown_running || countdown_beeping);
     // 示例显示逻辑 (应在 displayCountdownRunningScreen 中实现)
-    unsigned long r_h = display_remaining_s / 3600;
-    unsigned long r_m = (display_remaining_s % 3600) / 60;
-    unsigned long r_s = display_remaining_s % 60;
+    if(countdown_running){
+        unsigned long r_h = display_remaining_s / 3600;
+        unsigned long r_m = (display_remaining_s % 3600) / 60;
+        unsigned long r_s = display_remaining_s % 60;
 
-    lcd.setCursor(0, 0);
-    if (countdown_beeping)
-    {
-        lcd.print("Countdown: END!");
-    }
-    else if (countdown_running)
-    {
-        lcd.print("Countdown: RUN ");
-    }
-    else
-    {
-        lcd.print("Countdown: PAUSE");
-    }
+        lcd.setCursor(0, 0);
+        if (countdown_beeping)
+        {
+            lcd.print("Countdown: END!  ");
+        }
+        else if (countdown_running)
+        {   
+            lcd.print("Countdown: RUN    ");
+        }
+        else
+        {
+            lcd.print("Countdown: PAUSE  ");
+        }
 
-    lcd.setCursor(0, 1);
-    formatNumber(0, 1, r_h, 2);
-    lcd.print("H ");
-    formatNumber(4, 1, r_m, 2);
-    lcd.print("M ");
-    formatNumber(8, 1, r_s, 2);
-    lcd.print("S   "); // 清理后面
+        lcd.setCursor(0, 1);
+        formatNumber(0, 1, r_h, 2);
+        lcd.print("H ");
+        formatNumber(4, 1, r_m, 2);
+        lcd.print("M ");
+        formatNumber(8, 1, r_s, 2);
+        lcd.print("S   "); // 清理后面
+    }
 }
 
 void handleAlarmSettingMode() {
@@ -1993,5 +2314,257 @@ void loop()
     //   playMusic(twinkleMelody, twinkleDurations, twinkleSongLength);
     // }
     delay(100); // 在loop中加入少量延时是个好习惯，避免CPU空转过快
+}
+#endif
+
+
+#ifdef MAIN3
+// ----------------------------------------------------------------------------
+// Includes
+// ----------------------------------------------------------------------------
+#include <Arduino.h>
+#include <U8g2lib.h> // For OLED display
+#include <math.h>    // For M_PI, cos, sin, round
+
+// ----------------------------------------------------------------------------
+// OLED Configuration & U8g2 Object
+// ----------------------------------------------------------------------------
+// Using a common I2C OLED SSD1306 128x64 display.
+// Adjust constructor if your display is different.
+// U8G2_R0 means no rotation.
+// U8X8_PIN_NONE for reset if not used.
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
+
+// ----------------------------------------------------------------------------
+// Preprocessor Definitions & Feature Flags
+// ----------------------------------------------------------------------------
+#define __OLED__          // Enable OLED display features
+#define __Serial_DEBUG__  // Enable Serial debugging output
+
+#ifndef DEG_TO_RAD
+#define DEG_TO_RAD (M_PI / 180.0)
+#endif
+
+// ----------------------------------------------------------------------------
+// Clock Display Constants
+// ----------------------------------------------------------------------------
+const int SCREEN_WIDTH = 128;
+const int SCREEN_HEIGHT = 64;
+const int CLOCK_CENTER_X = SCREEN_WIDTH / 2;
+const int CLOCK_CENTER_Y = SCREEN_HEIGHT / 2;
+const int CLOCK_RADIUS = 22; // Adjusted for 128x64 screen to fit decorations
+
+// Decorative dots parameters
+const float DECOR_DOT_RADIUS_MIN_OFFSET = 2.0f; // Dots start this far from CLOCK_RADIUS
+const float DECOR_DOT_RADIUS_MAX_OFFSET = 5.0f; // Dots end this far from CLOCK_RADIUS
+
+// Hand lengths
+const int HOUR_HAND_LENGTH = CLOCK_RADIUS * 0.5;
+const int MINUTE_HAND_LENGTH = CLOCK_RADIUS * 0.7;
+const int SECOND_HAND_LENGTH = CLOCK_RADIUS * 0.85;
+
+// ----------------------------------------------------------------------------
+// Global Variables
+// ----------------------------------------------------------------------------
+#ifdef __OLED__
+volatile bool triggerOledUpdate = true; // Flag set by timer ISR, true for initial draw
+#endif
+
+// Simulated time - starts at 10:08:00
+int currentHour = 10;
+int currentMinute = 8;
+int currentSecond = 0;
+
+// System mode (simplified)
+enum SystemMode { NORMAL, SETTING, OTHER };
+SystemMode currentMode = NORMAL;
+
+// ----------------------------------------------------------------------------
+// Function: Draw Clock Face Elements (Static Part)
+// ----------------------------------------------------------------------------
+void drawClockFaceElements() {
+  // 1. Draw clock outer circles
+  u8g2.drawCircle(CLOCK_CENTER_X, CLOCK_CENTER_Y, CLOCK_RADIUS);
+  u8g2.drawCircle(CLOCK_CENTER_X, CLOCK_CENTER_Y, CLOCK_RADIUS - 1);
+
+  // 2. Draw hour ticks and numbers
+  u8g2.setFont(u8g2_font_u8glib_4_tf);       // Small font for numbers
+  int numFontAscent = u8g2.getAscent();      // Ascent for this font is 4
+  int numDisplayRadius = CLOCK_RADIUS - 6; // Radius for numbers
+
+  char numBuffer[4];
+
+  for (int i = 1; i <= 12; ++i) {
+    float angleDeg = (i * 30.0) - 90.0; // 0 deg is 3 o'clock, -90 is 12 o'clock
+    float angleRad = angleDeg * DEG_TO_RAD;
+
+    // --- Ticks ---
+    int x1_tick, y1_tick, x2_tick, y2_tick;
+    int tickLength = (i % 3 == 0) ? 4 : 2; // Longer ticks for 3, 6, 9, 12
+    x1_tick = round(CLOCK_CENTER_X + (CLOCK_RADIUS - tickLength -1) * cos(angleRad));
+    y1_tick = round(CLOCK_CENTER_Y + (CLOCK_RADIUS - tickLength -1) * sin(angleRad));
+    x2_tick = round(CLOCK_CENTER_X + (CLOCK_RADIUS - 1) * cos(angleRad));
+    y2_tick = round(CLOCK_CENTER_Y + (CLOCK_RADIUS - 1) * sin(angleRad));
+    u8g2.drawLine(x1_tick, y1_tick, x2_tick, y2_tick);
+
+    // --- Numbers ---
+    sprintf(numBuffer, "%d", i);
+    int strWidth = u8g2.getStrWidth(numBuffer);
+    int numX_base = round(CLOCK_CENTER_X + numDisplayRadius * cos(angleRad) - (strWidth / 2.0));
+    int numY_base = round(CLOCK_CENTER_Y + numDisplayRadius * sin(angleRad) + (numFontAscent / 2.0));
+    u8g2.drawStr(numX_base, numY_base, numBuffer);
+  }
+
+  // 3. Draw center dot
+  u8g2.drawDisc(CLOCK_CENTER_X, CLOCK_CENTER_Y, 2); // Small disc
+
+  // 4. Draw decorative dots around the clock face
+  const int NUM_DECOR_DOTS = 24;
+  for (int k = 0; k < NUM_DECOR_DOTS; ++k) {
+    float angleRad_decor = (random(0, 3600) / 10.0f) * DEG_TO_RAD;
+    float band_width = DECOR_DOT_RADIUS_MAX_OFFSET - DECOR_DOT_RADIUS_MIN_OFFSET;
+    float random_offset_in_band = 0;
+    if (band_width >= 0) { // Ensure band_width is not negative
+        random_offset_in_band = (float)random(0, (int)(band_width * 100) + 1) / 100.0f;
+    }
+    float current_decor_radius = CLOCK_RADIUS + DECOR_DOT_RADIUS_MIN_OFFSET + random_offset_in_band;
+    int dotX = round(CLOCK_CENTER_X + current_decor_radius * cos(angleRad_decor));
+    int dotY = round(CLOCK_CENTER_Y + current_decor_radius * sin(angleRad_decor));
+    if (dotX >=0 && dotX < SCREEN_WIDTH && dotY >=0 && dotY < SCREEN_HEIGHT) { // Basic boundary check
+        u8g2.drawPixel(dotX, dotY);
+    }
+  }
+  
+  // 5. Draw author name "Soleil" below center
+  u8g2.setFont(u8g2_font_u8glib_4_tf); // Ensure correct font
+  const char* authorName = "Soleil";
+  int authorNameWidth = u8g2.getStrWidth(authorName);
+  int authorNameX = CLOCK_CENTER_X - (authorNameWidth / 2);
+  int authorNameY = CLOCK_CENTER_Y + 8 + numFontAscent/2; // Baseline below center
+  u8g2.drawStr(authorNameX, authorNameY, authorName);
+}
+
+// ----------------------------------------------------------------------------
+// Function: Draw Clock Hands
+// ----------------------------------------------------------------------------
+void drawClockHands(int h, int m, int s) {
+  // Hour hand (h is 0-23)
+  // Convert hour to 12-hour format for angle calculation
+  float hourAngle = (((h % 12) + m / 60.0) * 30.0) - 90.0; // 30 degrees per hour
+  int hx = round(CLOCK_CENTER_X + HOUR_HAND_LENGTH * cos(hourAngle * DEG_TO_RAD));
+  int hy = round(CLOCK_CENTER_Y + HOUR_HAND_LENGTH * sin(hourAngle * DEG_TO_RAD));
+  u8g2.drawLine(CLOCK_CENTER_X, CLOCK_CENTER_Y, hx, hy);
+
+  // Minute hand
+  float minAngle = (m * 6.0) - 90.0; // 6 degrees per minute
+  int mx = round(CLOCK_CENTER_X + MINUTE_HAND_LENGTH * cos(minAngle * DEG_TO_RAD));
+  int my = round(CLOCK_CENTER_Y + MINUTE_HAND_LENGTH * sin(minAngle * DEG_TO_RAD));
+  u8g2.drawLine(CLOCK_CENTER_X, CLOCK_CENTER_Y, mx, my);
+
+  // Second hand
+  float secAngle = (s * 6.0) - 90.0; // 6 degrees per second
+  int sx = round(CLOCK_CENTER_X + SECOND_HAND_LENGTH * cos(secAngle * DEG_TO_RAD));
+  int sy = round(CLOCK_CENTER_Y + SECOND_HAND_LENGTH * sin(secAngle * DEG_TO_RAD));
+  u8g2.drawLine(CLOCK_CENTER_X, CLOCK_CENTER_Y, sx, sy);
+  // Thicker second hand (draw line twice slightly offset, or use drawUTF8 for thicker symbols if font supports)
+  u8g2.drawLine(CLOCK_CENTER_X+1, CLOCK_CENTER_Y, sx+1, sy); // Example for a bit thicker
+}
+
+// ----------------------------------------------------------------------------
+// Function: Display Full OLED Clock
+// ----------------------------------------------------------------------------
+void displayOLEDClock(int h, int m, int s) {
+  u8g2.clearBuffer();         // Clear the internal memory
+  drawClockFaceElements();    // Draw static parts
+  drawClockHands(h, m, s);    // Draw dynamic hands
+  u8g2.sendBuffer();          // Transfer internal memory to the display
+}
+
+// ----------------------------------------------------------------------------
+// Timer Setup for 1-Second Interrupt (AVR - Arduino UNO)
+// ----------------------------------------------------------------------------
+#ifdef __OLED__
+void setupOledUpdateTimer() {
+  cli(); // Disable global interrupts
+  TCCR1A = 0; // Set entire TCCR1A register to 0
+  TCCR1B = 0; // Same for TCCR1B
+  TCNT1  = 0; // Initialize counter value to 0
+
+  // Set compare match register for 1Hz increments
+  // OCR1A = (16,000,000 / (1024 * 1Hz)) - 1 = 15624 (for 16MHz clock)
+  OCR1A = 15624;
+  TCCR1B |= (1 << WGM12); // Turn on CTC mode
+  // Set CS12 and CS10 bits for 1024 prescaler
+  TCCR1B |= (1 << CS12) | (1 << CS10);
+  TIMSK1 |= (1 << OCIE1A); // Enable timer compare interrupt
+  sei(); // Enable global interrupts
+}
+
+// ----------------------------------------------------------------------------
+// Timer Interrupt Service Routine (ISR)
+// ----------------------------------------------------------------------------
+ISR(TIMER1_COMPA_vect) {
+  triggerOledUpdate = true;
+}
+#endif // __OLED__
+
+// ----------------------------------------------------------------------------
+// Arduino Setup Function
+// ----------------------------------------------------------------------------
+void setup() {
+#ifdef __Serial_DEBUG__
+  Serial.begin(115200);
+  while (!Serial); // Wait for Serial to connect (especially for native USB)
+  Serial.println("OLED Clock Example - Setup");
+#endif
+
+#ifdef __OLED__
+  u8g2.begin(); // Initialize U8g2 library
+  u8g2.setContrast(100); // Adjust contrast if needed (0-255)
+  randomSeed(analogRead(A0)); // Seed for decorative dots
+
+  setupOledUpdateTimer(); // Configure and start the 1-second timer interrupt
+  #ifdef __Serial_DEBUG__
+  Serial.println("OLED and Timer Initialized.");
+  #endif
+#endif
+}
+
+// ----------------------------------------------------------------------------
+// Arduino Loop Function
+// ----------------------------------------------------------------------------
+void loop() {
+#ifdef __OLED__
+  if (triggerOledUpdate) {
+    // --- Update Simulated Time ---
+    currentSecond++;
+    if (currentSecond >= 60) {
+      currentSecond = 0;
+      currentMinute++;
+      if (currentMinute >= 60) {
+        currentMinute = 0;
+        currentHour++;
+        if (currentHour >= 24) {
+          currentHour = 0;
+        }
+      }
+    }
+
+    if (currentMode == SystemMode::NORMAL) {
+#ifdef __Serial_DEBUG__
+      Serial.print("Updating OLED - Time: ");
+      Serial.print(currentHour); Serial.print(":");
+      if (currentMinute < 10) Serial.print("0"); Serial.print(currentMinute); Serial.print(":");
+      if (currentSecond < 10) Serial.print("0"); Serial.print(currentSecond); Serial.println("");
+#endif
+      displayOLEDClock(currentHour, currentMinute, currentSecond);
+    }
+    triggerOledUpdate = false; // Reset the flag
+  }
+#endif // __OLED__
+
+  // Other non-blocking code for your application can go here
+  // For example, checking buttons for mode changes, sensor readings, etc.
+  // delay(10); // Small delay if loop is very empty, but generally avoid long delays
 }
 #endif
